@@ -571,6 +571,15 @@ async fn group_toggle(webview: Webview, app: AppHandle, window: Window, gid: Gro
     ensure_visible_active(&app, win)
 }
 
+/// Drag & drop in the tab strip. The core keeps groups contiguous whatever the UI asks for.
+#[tauri::command]
+async fn move_tab(webview: Webview, app: AppHandle, window: Window, id: TabId, before: Option<TabId>, group: Option<GroupId>) -> Res { trusted(&webview)?;
+    let win = window.label();
+    with(&app, win, |l| l.move_to(id, before, group));
+    emit(&app, win);
+    Ok(())
+}
+
 #[tauri::command]
 async fn group_rename(webview: Webview, app: AppHandle, window: Window, gid: GroupId, name: String) -> Res { trusted(&webview)?;
     let win = window.label();
@@ -869,7 +878,7 @@ pub fn run() {
             ui_ready, new_tab, new_incognito_window, close_tab, activate_tab, navigate, go_back, go_forward, reload,
             toggle_bookmark, find_in_page, suggest, history_search, history_clear, bookmarks_list, bookmark_remove,
             downloads_list, show_download,
-            tab_menu, group_menu, group_toggle, group_rename,
+            tab_menu, group_menu, group_toggle, group_rename, move_tab,
             page_event, password_save, password_never, password_dismiss, password_menu,
             passwords_list, password_reveal, password_delete, passwords_import
         ])

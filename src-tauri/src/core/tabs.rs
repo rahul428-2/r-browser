@@ -173,11 +173,23 @@ impl TabList {
         right.or_else(|| self.tabs[..i].iter().rev().find(|t| self.visible(t.id))).map(|t| t.id)
     }
 
-    pub fn move_tab(&mut self, id: TabId, to: usize) {
-        if let Some(i) = self.tabs.iter().position(|t| t.id == id) {
-            let t = self.tabs.remove(i);
-            self.tabs.insert(to.min(self.tabs.len()), t);
-        }
+    /// Drag & drop: put the tab just before `before` (None = at the end), in `group` if possible.
+    /// Groups stay contiguous: dropping between two tabs of a group joins it, and a group the
+    /// drop spot doesn't touch is ignored.
+    pub fn move_to(&mut self, id: TabId, before: Option<TabId>, group: Option<GroupId>) {
+        let Some(i) = self.tabs.iter().position(|t| t.id == id) else { return };
+        let mut t = self.tabs.remove(i);
+        let at = if before == Some(id) { i } else {
+            match before {
+                Some(b) => match self.tabs.iter().position(|x| x.id == b) { Some(j) => j, None => { self.tabs.insert(i, t); return; } },
+                None => self.tabs.len(),
+            }
+        };
+        let left = at.checked_sub(1).and_then(|j| self.tabs.get(j)).and_then(|x| x.group);
+        let right = self.tabs.get(at).and_then(|x| x.group);
+        t.group = if left.is_some() && left == right { left } else if group.is_some() && (group == left || group == right) { group } else { None };
+        self.tabs.insert(at, t);
+        self.prune_groups();
     }
 
     pub fn get(&self, id: TabId) -> Option<&Tab> { self.tabs.iter().find(|t| t.id == id) }
@@ -264,9 +276,35 @@ mod tests {
         assert!(l.visible(c), "activating a hidden tab expands its group");
         let _ = a;
     }
-    #[test] fn move_tab_reorders() {
+    #[test] fn move_reorders() {
         let (mut l, a, b, c) = three();
-        l.move_tab(c, 0);
-        assert_eq!(l.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), vec![c, a, b]);
+        l.move_to(c, Some(a), None);
+        assert_eq!(ids(&l), vec![c, a, b]);
+        l.move_to(c, None, None);
+        assert_eq!(ids(&l), vec![a, b, c]);
+        l.move_to(b, Some(b), None);
+        assert_eq!(ids(&l), vec![a, b, c], "dropping on itself is a no-op");
+    }
+    #[test] fn drag_into_middle_of_group_joins_it() {
+        let (mut l, a, b, c) = three();
+        let g = l.new_group(b).unwrap();
+        l.add_to_group(c, g);
+        l.move_to(a, Some(c), None); // between b and c: can't split the group
+        assert_eq!(ids(&l), vec![b, a, c]);
+        assert_eq!(l.get(a).unwrap().group, Some(g));
+    }
+    #[test] fn drag_to_group_edge_follows_request() {
+        let (mut l, a, b, c) = three();
+        let g = l.new_group(a).unwrap();
+        l.add_to_group(b, g);
+        l.move_to(c, Some(a), Some(g)); // left edge, asked to join
+        assert_eq!(l.get(c).unwrap().group, Some(g));
+        l.move_to(b, None, None); // dragged out to the end
+        assert_eq!((ids(&l), l.get(b).unwrap().group), (vec![c, a, b], None));
+        let d = l.open("d", false);
+        l.move_to(d, None, Some(g)); // asking for a group it isn't next to is ignored
+        assert_eq!(l.get(d).unwrap().group, None);
+        l.move_to(b, None, Some(g)); // end of the strip is after d, not next to g either
+        assert_eq!((ids(&l), l.get(b).unwrap().group), (vec![c, a, d, b], None));
     }
 }

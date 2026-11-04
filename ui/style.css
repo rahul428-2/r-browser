@@ -31,6 +31,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--signal); ou
 #strip { height: var(--strip-h); display: flex; align-items: flex-end; padding: 0 8px; }
 body.mac #strip { padding-left: 80px; }
 #tabs { display: flex; min-width: 0; height: 30px; }
+#strip { position: relative; }
+.tab.dragging { z-index: 2; background: var(--hull-hi); color: var(--ice); box-shadow: 0 4px 14px #0008; }
+#dropmark { position: absolute; bottom: 3px; width: 2px; height: 24px; border-radius: 1px; pointer-events: none;
+  box-shadow: 0 0 6px currentColor; }
 
 .tab { position: relative; display: flex; align-items: center; gap: 8px;
   width: 220px; min-width: 44px; flex: 0 1 220px; height: 30px; padding: 0 6px 0 12px;

@@ -24,6 +24,7 @@ fn main() {
         "group_menu",
         "group_toggle",
         "group_rename",
+        "move_tab",
         "page_event",
         "password_save",
         "password_never",
