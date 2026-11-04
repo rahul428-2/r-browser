@@ -29,6 +29,8 @@ pub struct Tab {
     pub group: Option<GroupId>,
     /// The page has a password field (drives the key icon in the address bar).
     pub login_form: bool,
+    /// Between page-load Started and Finished (drives the loading bar).
+    pub loading: bool,
 }
 
 /// Invariant: the tabs of a group are always next to each other.

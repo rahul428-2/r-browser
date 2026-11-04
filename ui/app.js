@@ -134,6 +134,7 @@ function renderBar() {
   const st = !u ? "none" : u.protocol === "https:" ? "secure" : u.protocol === "http:" ? "insecure" : "none";
   $("omni").dataset.state = st;
   document.body.dataset.state = st;
+  document.body.dataset.loading = cur && cur.loading ? "1" : "";
   $("chip").replaceChildren(icon(st === "secure" ? "i-shield" : st === "insecure" ? "i-warn" : "i-search"));
   $("chip").title = st === "secure" ? "Encrypted connection" : st === "insecure" ? "Not secure: this connection isn't encrypted" : "";
 

@@ -215,7 +215,7 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
             *destination = path.clone();
             rt.downloads.lock().unwrap().insert(url.to_string(), path.clone());
             if let (Some((w, id)), Some(prev)) = (parse_label(wv.label()), rt.committed.lock().unwrap().get(wv.label()).cloned()) {
-                with(app, &w, |l| if let Some(t) = l.get_mut(id) { t.url = prev; });
+                with(app, &w, |l| if let Some(t) = l.get_mut(id) { t.url = prev; t.loading = false; });
                 emit(app, &w);
             }
             if !incognito {
@@ -253,6 +253,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             let title = with(&a1, &win, |l| l.get_mut(id).map(|t| {
                 t.url = url.clone();
                 if started { t.login_form = false; }
+                t.loading = started;
                 t.title.clone()
             })).unwrap_or_default();
             if p.event() == PageLoadEvent::Finished {
