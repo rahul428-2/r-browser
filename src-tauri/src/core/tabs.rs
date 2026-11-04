@@ -24,13 +24,32 @@ pub struct TabList {
     next_id: TabId,
 }
 
+fn app_page(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    let app_origin = u.scheme() == "tauri" || matches!(u.host_str(), Some("tauri.localhost" | "localhost" | "127.0.0.1"));
+    let name = u.path().strip_prefix("/pages/")?.strip_suffix(".html")?;
+    (app_origin && !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| name.to_string())
+}
+
 /// The built-in new-tab page. Only counts when served by the app itself (tauri://localhost,
 /// http://tauri.localhost, or the local dev server) — a website serving /pages/newtab.html does not.
 pub fn is_newtab(url: &str) -> bool {
-    if url.is_empty() { return true; }
-    let Ok(u) = url::Url::parse(url) else { return false };
-    let app_origin = u.scheme() == "tauri" || matches!(u.host_str(), Some("tauri.localhost" | "localhost" | "127.0.0.1"));
-    app_origin && u.path() == "/pages/newtab.html"
+    url.is_empty() || url == "rb://newtab" || app_page(url).as_deref() == Some("newtab")
+}
+
+/// Show/store the app's own pages as `rb://name` (new tab as ""); everything else unchanged.
+pub fn to_rb(url: &str) -> String {
+    match app_page(url) {
+        Some(n) if n == "newtab" => String::new(),
+        Some(n) => format!("rb://{n}"),
+        None => url.to_string(),
+    }
+}
+
+/// `rb://history` -> `pages/history.html` (only plain names, so no path tricks).
+pub fn rb_page(url: &str) -> Option<String> {
+    let name = url.strip_prefix("rb://")?.trim_end_matches('/');
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| format!("pages/{name}.html"))
 }
 
 pub fn now_secs() -> u64 {
@@ -103,6 +122,13 @@ mod tests {
         assert!(is_newtab("tauri://localhost/pages/newtab.html"));
         assert!(is_newtab("http://127.0.0.1:1430/pages/newtab.html"));
         assert!(!is_newtab("https://evil.com/pages/newtab.html"));
+    }
+    #[test] fn app_pages_map_to_rb_scheme() {
+        assert_eq!(to_rb("http://127.0.0.1:1430/pages/history.html"), "rb://history");
+        assert_eq!(to_rb("tauri://localhost/pages/newtab.html"), "");
+        assert_eq!(to_rb("https://evil.com/pages/history.html"), "https://evil.com/pages/history.html");
+        assert_eq!(rb_page("rb://downloads"), Some("pages/downloads.html".into()));
+        assert_eq!(rb_page("rb://../secret"), None);
     }
     #[test] fn move_tab_reorders() {
         let (mut l, a, b, c) = three();

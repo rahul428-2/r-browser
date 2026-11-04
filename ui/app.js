@@ -1,8 +1,10 @@
 const { invoke } = window.__TAURI__.core;
-const { listen } = window.__TAURI__.event;
+const me = window.__TAURI__.webview.getCurrentWebview(); // events targeted at this toolbar only
+const myWindow = window.__TAURI__.window.getCurrentWindow().label;
 const $ = (id) => document.getElementById(id);
 if (navigator.userAgent.includes("Mac")) document.body.classList.add("mac");
-if (window.__TAURI__.window.getCurrentWindow().label.startsWith("incognito-")) document.body.classList.add("incognito");
+const incognito = myWindow.startsWith("incognito-");
+if (incognito) document.body.classList.add("incognito");
 
 let state = { tabs: [], active: null };
 const parse = (url) => { try { return new URL(url); } catch { return null; } };
@@ -29,7 +31,7 @@ function favicon(t) {
     return box;
   }
   const mono = () => { box.className = "fav mono"; box.textContent = (u.hostname.replace(/^www\./, "")[0] || "?").toUpperCase(); };
-  if (t.frozen) { mono(); return box; } // frozen tabs make no network requests
+  if (t.frozen || incognito) { mono(); return box; } // frozen tabs make no requests; incognito leaves no favicon traces
   const img = new Image();
   img.onerror = () => { img.remove(); mono(); };
   img.src = u.origin + "/favicon.ico";
@@ -77,13 +79,18 @@ function renderBar() {
     b.textContent = u.host.replace(/^www\./, "");
     pretty.append(b, rest);
   }
+  $("star").classList.toggle("on", !!state.bookmarked);
+  $("star").title = state.bookmarked ? "Remove bookmark (Ctrl/⌘+D)" : "Bookmark this page (Ctrl/⌘+D)";
   if (document.activeElement !== $("url")) {
     $("url").value = url;
     $("omni").classList.toggle("resting", pretty.childNodes.length > 0);
   }
 }
 
-listen("tabs-changed", (e) => { state = e.payload; renderTabs(); renderBar(); });
+me.listen("tabs-changed", (e) => {
+  if (e.payload.win !== myWindow) return; // never render another window's (e.g. incognito) tabs
+  state = e.payload; renderTabs(); renderBar();
+});
 
 const act = (cmd) => state.active != null && invoke(cmd, { id: state.active });
 $("newtab").onclick = () => invoke("new_tab", {}).then(() => $("url").focus());
@@ -101,5 +108,50 @@ url.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape") url.blur();
 });
+
+// ---- bookmark star ----
+$("star").onclick = (e) => { e.preventDefault(); invoke("toggle_bookmark"); };
+
+// ---- suggestions from bookmarks + history (native datalist popup) ----
+let sugTimer;
+url.addEventListener("input", () => {
+  clearTimeout(sugTimer);
+  sugTimer = setTimeout(async () => {
+    const list = await invoke("suggest", { query: url.value });
+    $("sugg").replaceChildren(...list.map((s) => {
+      const o = document.createElement("option");
+      o.value = s.url;
+      o.label = (s.bookmarked ? "★ " : "") + (s.title || s.url);
+      return o;
+    }));
+  }, 80);
+});
+
+// ---- find in page ----
+window.openFind = () => { $("find").hidden = false; $("findq").focus(); $("findq").select(); };
+const findGo = (backwards) => state.active != null && $("findq").value &&
+  invoke("find_in_page", { id: state.active, query: $("findq").value, backwards });
+$("find").onsubmit = (e) => { e.preventDefault(); findGo(false); };
+$("findprev").onclick = () => findGo(true);
+$("findclose").onclick = () => { $("find").hidden = true; };
+$("findq").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); findGo(true); }
+  if (e.key === "Escape") $("find").hidden = true;
+});
+
+// ---- download notice ----
+let toastTimer;
+me.listen("download", (e) => {
+  const [win, name, status] = e.payload;
+  if (win !== myWindow) return;
+  const t = $("toast");
+  t.hidden = false;
+  t.classList.toggle("failed", status === "failed");
+  t.querySelector("span").textContent =
+    status === "started" ? `Downloading ${name}` : status === "done" ? `Downloaded ${name}` : `Download failed: ${name}`;
+  clearTimeout(toastTimer);
+  if (status !== "started") toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
+});
+$("toast").onclick = () => invoke("new_tab", { url: "rb://downloads" });
 
 invoke("ui_ready");

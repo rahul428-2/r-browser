@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Downloads</title>
+  <link rel="stylesheet" href="page.css">
+</head>
+<body>
+  <header>
+    <h1>Downloads</h1>
+  </header>
+  <main id="list"></main>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+
+    async function render() {
+      const items = await invoke("downloads_list");
+      const list = document.getElementById("list");
+      list.replaceChildren();
+      if (!items.length) { list.append(el("p", "empty", "Files you download are saved to your Downloads folder and listed here. R-Browser never opens them automatically.")); return; }
+      for (const d of items) {
+        const row = el("div", "row");
+        const name = d.path.split(/[\\/]/).pop();
+        const main = el("div", "main");
+        const status = !d.done ? el("span", null, "Downloading…") : d.ok ? el("span", "ok", "Saved") : el("span", "bad", "Failed");
+        const sub = el("div", "sub"); sub.append(status, " from " + host(d.url));
+        main.append(el("div", "title", name), sub);
+        row.append(el("span", "mono", (name.split(".").pop() || "?").slice(0, 3).toUpperCase()), main);
+        if (d.done && d.ok) {
+          const show = el("button", "text", "Show in folder");
+          show.onclick = () => invoke("show_download", { path: d.path });
+          row.append(show);
+        }
+        list.append(row);
+      }
+    }
+    render();
+    setInterval(render, 2000); // ponytail: polling; push events if the list ever gets long
+  </script>
+</body>
+</html>

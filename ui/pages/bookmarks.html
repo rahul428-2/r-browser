@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Bookmarks</title>
+  <link rel="stylesheet" href="page.css">
+</head>
+<body>
+  <header>
+    <h1>Bookmarks</h1>
+    <input class="search" id="q" type="search" placeholder="Search bookmarks" aria-label="Search bookmarks" autofocus>
+  </header>
+  <main id="list"></main>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
+
+    async function render() {
+      const q = document.getElementById("q").value.trim().toLowerCase();
+      const marks = (await invoke("bookmarks_list")).filter((b) => !q || b.url.toLowerCase().includes(q) || b.title.toLowerCase().includes(q));
+      const list = document.getElementById("list");
+      list.replaceChildren();
+      if (!marks.length) { list.append(el("p", "empty", q ? "No bookmarks match that search." : "Press Ctrl/⌘+D or the star in the address bar to bookmark a page.")); return; }
+      for (const b of marks) {
+        const a = el("a", "row"); a.href = b.url;
+        const main = el("div", "main");
+        main.append(el("div", "title", b.title || host(b.url)), el("div", "sub", b.url));
+        const x = el("button", "text x", "Remove");
+        x.onclick = async (e) => { e.preventDefault(); await invoke("bookmark_remove", { url: b.url }); render(); };
+        a.append(el("span", "mono", (host(b.url)[0] || "?").toUpperCase()), main, x);
+        list.append(a);
+      }
+    }
+    document.getElementById("q").addEventListener("input", render);
+    render();
+  </script>
+</body>
+</html>

@@ -23,6 +23,12 @@
 - **Remote pages get exactly one IPC command: `page_event`.** Rust derives the tab id and origin from the calling webview's label and current URL — never from the payload. No other Tauri command is reachable from remote content (enforce via capabilities file).
 - Commits: plain messages, no AI attribution lines.
 
+## Known gaps found while building (fix in the named task)
+
+- **Content-Disposition ignored on macOS** (wry only downloads MIME types WebKit can't show; `attachment` JSON/PDF open inline) → Task 10 (downloads hook): override the navigation-response policy.
+- **`__TAURI_INTERNALS__` is injected into every page** → sites can detect R-Browser; Task 11 (fingerprint) must hide it from remote pages while keeping `page_event`.
+- **Incognito tabs are isolated from each other on macOS** (wry gives each incognito webview its own non-persistent store; Chrome shares one per incognito window). Stricter than Chrome; acceptable for v1.
+
 ## Review Focus
 
 1. **Corrupt or half-written session file** (power cut mid-save) → browser still starts with one new tab, keeps the bad file as `session.json.bad`. Test: Task 2 `load_corrupt_returns_none_and_backs_up`.

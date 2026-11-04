@@ -87,6 +87,27 @@ body.mac #strip { padding-left: 80px; }
 #omni.resting #url { color: transparent; }
 #omni:not(.resting) #pretty { display: none; }
 
+#star { width: 26px; height: 26px; margin-right: -8px; border-radius: 13px; }
+#star svg { width: 15px; height: 15px; }
+#star.on { color: var(--signal); }
+#star.on svg { fill: currentColor; }
+#omni[data-state="none"] #star { display: none; }
+
+#find { display: flex; align-items: center; gap: 2px; height: 31px; margin-left: 8px; padding: 0 4px 0 12px;
+  width: 300px; border-radius: 16px; background: var(--well); border: 1px solid var(--signal); }
+#find[hidden] { display: none; }
+#findq { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--ice); font: 13px system-ui, sans-serif; }
+#find button.icon { width: 24px; height: 24px; }
+#find svg { width: 14px; height: 14px; }
+
+#toast { display: flex; align-items: center; gap: 6px; margin: 0 8px 7px auto; height: 22px; padding: 0 10px 0 8px;
+  border: 0; border-radius: 11px; background: #3b9eff1f; color: #b8dcff; font: 500 12px system-ui, sans-serif; max-width: 320px; }
+#toast[hidden] { display: none; }
+#toast span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#toast svg { width: 14px; height: 14px; }
+#toast.failed { background: #f5b54a1f; color: var(--amber); }
+body.incognito #toast:not([hidden]) + #private { margin-left: 0; }
+
 /* ---------- the guard line: security state, full width ---------- */
 #guard { height: 1px; background: #1a2639; transition: background .3s, box-shadow .3s; }
 body[data-state="secure"] #guard { background: linear-gradient(90deg, transparent, var(--signal) 30%, var(--glint) 50%, var(--signal) 70%, transparent);

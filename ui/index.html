@@ -16,6 +16,10 @@
       <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></symbol>
       <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></symbol>
       <symbol id="i-mask" viewBox="0 0 24 24"><path d="M3 10c3-1 6-1.5 9-1.5S18 9 21 10c0 3-1.5 6-4.5 6-2 0-3-1.5-4.5-1.5S9.5 16 7.5 16C4.5 16 3 13 3 10z"/><path d="M8 12h1.5M14.5 12H16"/></symbol>
+      <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
+      <symbol id="i-dn" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
     </defs>
   </svg>
@@ -23,6 +27,7 @@
   <header id="strip" data-tauri-drag-region>
     <div id="tabs" role="tablist"></div>
     <button id="newtab" class="icon" aria-label="New tab"><svg><use href="#i-plus"/></svg></button>
+    <button id="toast" hidden><svg><use href="#i-down"/></svg><span></span></button>
     <span id="private" title="Incognito: no history, cookies or site data are kept after you close this window"><svg><use href="#i-mask"/></svg>Incognito</span>
   </header>
 
@@ -33,8 +38,16 @@
     <label id="omni" data-state="none">
       <span id="chip" title=""><svg><use href="#i-search"/></svg></span>
       <span id="pretty" aria-hidden="true"></span>
-      <input id="url" spellcheck="false" autocomplete="off" placeholder="Search Google or type a web address">
+      <input id="url" list="sugg" spellcheck="false" autocomplete="off" placeholder="Search Google or type a web address">
+      <datalist id="sugg"></datalist>
+      <button id="star" class="icon" aria-label="Bookmark this page" title="Bookmark this page (Ctrl/⌘+D)"><svg><use href="#i-star"/></svg></button>
     </label>
+    <form id="find" hidden>
+      <input id="findq" spellcheck="false" autocomplete="off" placeholder="Find in page" aria-label="Find in page">
+      <button type="button" id="findprev" class="icon" aria-label="Previous match"><svg><use href="#i-up"/></svg></button>
+      <button type="submit" id="findnext" class="icon" aria-label="Next match"><svg><use href="#i-dn"/></svg></button>
+      <button type="button" id="findclose" class="icon" aria-label="Close find"><svg><use href="#i-x"/></svg></button>
+    </form>
   </nav>
   <div id="guard" aria-hidden="true"></div>
 

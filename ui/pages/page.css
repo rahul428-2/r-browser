@@ -1,0 +1,33 @@
+:root { --abyss: #070b14; --hull: #111a2b; --well: #0f1726; --line: #1a2639; --ice: #dce6f5; --fog: #7d8ba3;
+  --signal: #3b9eff; --glint: #7fe3ff; --amber: #f5b54a; }
+* { box-sizing: border-box; margin: 0; }
+html { background: var(--abyss); color: var(--ice); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+  -webkit-font-smoothing: antialiased; }
+body { max-width: 860px; margin: 0 auto; padding: 48px 24px 80px; }
+header { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; }
+h1 { font-size: 26px; font-weight: 600; letter-spacing: -.3px; flex: 1; }
+h2 { font-size: 13px; font-weight: 600; color: var(--fog); margin: 28px 0 6px 12px; }
+.search { width: 300px; height: 36px; padding: 0 14px; border-radius: 18px; background: var(--well);
+  border: 1px solid var(--line); color: var(--ice); font: inherit; outline: 0; caret-color: var(--glint); }
+.search:focus { border-color: var(--signal); box-shadow: 0 0 0 3px #3b9eff26; }
+button.text { height: 32px; padding: 0 14px; border-radius: 16px; border: 1px solid var(--line); background: none;
+  color: var(--ice); font: inherit; cursor: pointer; }
+button.text:hover { background: var(--hull); }
+button.text.danger:hover { border-color: var(--amber); color: var(--amber); }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+.row { display: flex; align-items: center; gap: 14px; padding: 9px 12px; border-radius: 10px; color: inherit;
+  text-decoration: none; }
+a.row:hover { background: var(--hull); }
+.mono { width: 22px; height: 22px; flex: none; border-radius: 6px; display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; color: var(--abyss); background: var(--fog); }
+.main { flex: 1; min-width: 0; }
+.title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.sub { color: var(--fog); font-size: 12.5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.time { color: var(--fog); font-size: 12.5px; font-variant-numeric: tabular-nums; width: 64px; flex: none; }
+.row .x { visibility: hidden; }
+.row:hover .x { visibility: visible; }
+.empty { color: var(--fog); padding: 40px 12px; }
+.ok { color: var(--signal); }
+.bad { color: var(--amber); }
+@media (max-width: 600px) { header { flex-wrap: wrap; } .search { width: 100%; } }

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>History</title>
+  <link rel="stylesheet" href="page.css">
+</head>
+<body>
+  <header>
+    <h1>History</h1>
+    <input class="search" id="q" type="search" placeholder="Search history" aria-label="Search history" autofocus>
+    <button class="text danger" id="clear">Clear history</button>
+  </header>
+  <main id="list"></main>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
+    const dayName = (d) => {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const diff = Math.round((today - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 864e5);
+      return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+    };
+
+    async function render() {
+      const visits = await invoke("history_search", { query: document.getElementById("q").value });
+      const list = document.getElementById("list");
+      list.replaceChildren();
+      if (!visits.length) { list.append(el("p", "empty", document.getElementById("q").value ? "No pages match that search." : "Pages you visit will show up here. Incognito windows are never recorded.")); return; }
+      let lastDay = "";
+      for (const v of visits) {
+        const d = new Date(v.at * 1000);
+        const day = dayName(d);
+        if (day !== lastDay) { list.append(el("h2", null, day)); lastDay = day; }
+        const a = el("a", "row"); a.href = v.url;
+        const main = el("div", "main");
+        main.append(el("div", "title", v.title || host(v.url)), el("div", "sub", host(v.url)));
+        a.append(el("span", "time", d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })),
+                 el("span", "mono", (host(v.url)[0] || "?").toUpperCase()), main);
+        list.append(a);
+      }
+    }
+    let t; document.getElementById("q").addEventListener("input", () => { clearTimeout(t); t = setTimeout(render, 120); });
+    document.getElementById("clear").onclick = async () => { await invoke("history_clear"); render(); };
+    render();
+  </script>
+</body>
+</html>

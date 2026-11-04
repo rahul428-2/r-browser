@@ -1,6 +1,5 @@
 use crate::core::tabs::{is_newtab, TabList};
 use serde::{Deserialize, Serialize};
-use std::{fs, io, io::Write, path::Path};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct SavedTab {
@@ -34,30 +33,12 @@ impl Session {
     }
 }
 
-/// Write to a temp file, fsync, then rename, so a crash never leaves a half-written session.
-pub fn save_atomic(path: &Path, s: &Session) -> io::Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    let mut f = fs::File::create(&tmp)?;
-    f.write_all(&serde_json::to_vec(s)?)?;
-    f.sync_all()?;
-    fs::rename(&tmp, path)
-}
-
-/// None if missing or unreadable; a corrupt file is kept as `session.json.bad` for inspection.
-pub fn load(path: &Path) -> Option<Session> {
-    let bytes = fs::read(path).ok()?;
-    match serde_json::from_slice(&bytes) {
-        Ok(s) => Some(s),
-        Err(_) => {
-            let _ = fs::rename(path, path.with_extension("json.bad"));
-            None
-        }
-    }
-}
+pub use crate::core::store::{load, save_atomic};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn dir() -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("rb-session-{}-{:?}", std::process::id(), std::thread::current().id()));
@@ -100,13 +81,13 @@ mod tests {
         let d = dir();
         let p = d.join("session.json");
         fs::write(&p, "{garbage").unwrap();
-        assert_eq!(load(&p), None);
+        assert_eq!(load::<Session>(&p), None);
         assert!(d.join("session.json.bad").exists());
         assert!(!p.exists());
     }
 
     #[test]
     fn load_missing_returns_none() {
-        assert_eq!(load(&dir().join("nope.json")), None);
+        assert_eq!(load::<Session>(&dir().join("nope.json")), None);
     }
 }
