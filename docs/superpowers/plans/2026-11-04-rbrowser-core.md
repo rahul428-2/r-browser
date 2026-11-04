@@ -16,7 +16,7 @@
 - No telemetry or analytics, ever. The only network calls R-Browser makes on its own: filter-list / top-list refresh (weekly), Safe Browsing updates, updater check.
 - No Chromium, no Electron. Engines: WKWebView (macOS 13+), WebView2 (Windows 10/11), WebKitGTK 4.1 (Ubuntu 22.04+).
 - Local builds: always `-j 6` (laptop thermal limit). `export CARGO_BUILD_JOBS=6` in the dev shell.
-- License MPL-2.0. Default search: DuckDuckGo (`https://duckduckgo.com/?q=`).
+- License MPL-2.0. Default search: Google (`https://www.google.com/search?q=`).
 - Freeze idle background tabs after **300 s** (user-adjustable). Verified list = **Tranco top 10,000** registrable domains.
 - Lists refresh **weekly**; bundled copies ship in `resources/` so first run works offline.
 - Internal pages use the `rb://` custom scheme (`rb://blocked`, `rb://warning`, `rb://insecure`, `rb://newtab`, `rb://settings`, `rb://passwords`).
@@ -41,7 +41,7 @@
 
 **Interfaces:**
 - Produces:
-  - `core::omnibox::resolve(input: &str) -> String` — URL or DuckDuckGo search URL.
+  - `core::omnibox::resolve(input: &str) -> String` — URL or Google search URL.
   - `core::tabs::{TabId = u64, Tab { id, url: String, title: String, incognito: bool, frozen: bool, pinned: bool, audible: bool, dirty_form: bool, last_active: u64 }, TabList { tabs: Vec<Tab>, active: Option<TabId> }}` with `TabList::open(url, incognito) -> TabId`, `close(id) -> Option<TabId>` (returns new active), `activate(id)`, `move_tab(id, to: usize)`, `get(id) -> Option<&Tab>`, `get_mut`.
   - Tauri commands (UI only): `new_tab(url)`, `close_tab(id)`, `activate_tab(id)`, `navigate(id, input)`, `go_back(id)`, `go_forward(id)`, `reload(id)`. Event `tabs-changed` with the full `TabList` as JSON.
   - Child webview label format: `tab-{id}`. UI webview label: `ui`. UI bar height: 76 px; tab webviews fill the rest and resize with the window.
@@ -56,7 +56,7 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 ```rust
 // core/omnibox.rs
 #[test] fn bare_domain_gets_https() { assert_eq!(resolve("example.com"), "https://example.com/"); }
-#[test] fn words_become_search() { assert_eq!(resolve("hello world"), "https://duckduckgo.com/?q=hello+world"); }
+#[test] fn words_become_search() { assert_eq!(resolve("hello world"), "https://www.google.com/search?q=hello+world"); }
 #[test] fn full_url_kept() { assert_eq!(resolve("http://a.com/x"), "http://a.com/x"); }
 #[test] fn localhost_port() { assert_eq!(resolve("localhost:3000"), "http://localhost:3000/"); }
 #[test] fn rb_scheme_kept() { assert_eq!(resolve("rb://settings"), "rb://settings"); }

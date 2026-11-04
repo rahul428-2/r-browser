@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>R-Browser</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="strip" data-tauri-drag-region>
+    <div id="tabs"></div>
+    <button id="newtab" title="New tab (Ctrl/⌘+T)">+</button>
+  </div>
+  <div id="bar">
+    <button id="back" title="Back">‹</button>
+    <button id="fwd" title="Forward">›</button>
+    <button id="reload" title="Reload">↻</button>
+    <div id="omni">
+      <span id="trust" title=""></span>
+      <input id="url" spellcheck="false" autocomplete="off" placeholder="Search Google or type a URL">
+    </div>
+    <button id="menu" title="Menu">≡</button>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

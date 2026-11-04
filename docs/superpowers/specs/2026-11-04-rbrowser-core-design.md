@@ -47,7 +47,7 @@ Extension store: **dropped for now** (Rahul, 4 Nov).
 ## 5. Features
 
 ### 5.1 Standard browser features
-Tabs (open/close/reorder/duplicate), back/forward/reload, URL bar with search (default engine: DuckDuckGo — assistant's call, user-changeable), bookmarks, history, downloads list, find in page, zoom, print, keyboard shortcuts matching Chrome's common ones, settings page.
+Tabs (open/close/reorder/duplicate), back/forward/reload, URL bar with search (default engine: Google — Rahul, 4 Nov; user-changeable), bookmarks, history, downloads list, find in page, zoom, print, keyboard shortcuts matching Chrome's common ones, settings page.
 
 ### 5.2 Session restore
 - Session (all windows, tabs, order, URL, scroll position, frozen/active state) written to disk as JSON, debounced ~1 s after any change, via write-to-temp-then-rename so a crash never leaves a corrupt file.
