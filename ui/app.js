@@ -156,84 +156,137 @@ function renderBar() {
   }
 }
 
+let settling = false; // a dropped tab is gliding into its slot; the new order renders right after
 me.listen("tabs-changed", (e) => {
   if (e.payload.win !== myWindow) return; // never render another window's (e.g. incognito) tabs
   state = e.payload;
-  if (!drag) renderTabs(); // a re-render mid-drag would drop the tab under the cursor; catch up on drop
+  if (!drag && !settling) renderTabs(); // re-rendering mid-drag would yank the tab from under the cursor
   renderBar();
 });
 
-// ---- drag tabs left/right, into and out of groups (like Chrome) ----
-// The tab under the cursor decides: over a grouped tab -> join that group; over an ungrouped tab,
-// a group chip or empty strip -> no group. The Rust core keeps groups contiguous whatever we ask.
+// ---- drag tabs, like Chrome ----
+// Sideways: the tab follows the cursor and the others slide aside; on release it glides into its slot.
+// Over a grouped tab it joins that group, over an ungrouped tab or a chip it leaves (the Rust core keeps
+// groups contiguous). Pulled down into the page or above the window: it tears off into its own window that
+// follows the cursor (the only tab: the window itself moves). Released over any R-Browser tab strip, even
+// the one it came from, it attaches there; anywhere else it stays a window.
 let drag = null;
 let dragJustEnded = false;
 const marker = document.createElement("div");
 marker.id = "dropmark";
 
 function startDrag(e, el, t) {
-  if (e.button !== 0 || e.target.closest(".x")) return;
-  drag = { el, t, x0: e.clientX, moving: false, target: null };
+  if (e.button !== 0 || e.target.closest(".x") || drag || settling) return;
+  const items = [...$("tabs").children];
+  drag = { el, t, x0: e.clientX, y0: e.clientY, moving: false, torn: false, items, idx: items.indexOf(el),
+    rects: items.map((i) => i.getBoundingClientRect()), others: [], k: null, group: t.group ?? null, last: e, raf: 0 };
   el.setPointerCapture(e.pointerId);
-  el.onpointermove = (ev) => moveDrag(ev);
-  el.onpointerup = el.onpointercancel = () => endDrag();
+  el.onpointermove = (ev) => { if (!drag) return; drag.last = ev; if (!drag.raf) drag.raf = requestAnimationFrame(frame); };
+  el.onpointerup = el.onpointercancel = (ev) => { if (drag) drag.last = ev; endDrag(); };
 }
 
-function dropTarget(x) {
-  const order = state.tabs.filter((t) => t.id !== drag.t.id);
-  const next = (id) => { const i = order.findIndex((t) => t.id === id); return order[i + 1] ? order[i + 1].id : null; };
-  const items = [...$("tabs").children].filter((e) => e !== drag.el);
-  for (const e of items) {
-    const r = e.getBoundingClientRect();
-    if (x < r.left || x >= r.right) continue;
-    if (e.dataset.gid) { // group chip: just before the group, outside it
-      const first = order.find((t) => t.group === +e.dataset.gid);
-      return { before: first ? first.id : null, group: null, x: r.left, color: null };
-    }
-    const id = +e.dataset.id, t = order.find((t) => t.id === id);
-    const leftHalf = x < r.left + r.width / 2;
-    const g = (state.groups || []).find((g) => g.id === t.group);
-    return { before: leftHalf ? id : next(id), group: t.group ?? null, x: leftHalf ? r.left : r.right, color: g ? GROUP_COLORS[g.color] : null };
+function frame() {
+  const d = drag;
+  if (!d) return;
+  d.raf = 0;
+  const e = d.last, dx = e.clientX - d.x0;
+  if (d.torn) { invoke("tear_move", { x: e.screenX, y: e.screenY }); return; }
+  if (!d.moving && Math.abs(dx) < 5 && Math.abs(e.clientY - d.y0) < 14) return;
+  if (!d.moving) { d.moving = true; d.el.classList.add("dragging"); $("tabs").classList.add("reordering"); }
+  if (e.clientY > innerHeight + 40 || e.clientY < -25) { tearOff(e); return; }
+
+  const r0 = d.rects[d.idx], w = r0.width;
+  const lo = d.rects[0].left, hi = Math.max(...d.rects.map((r) => r.right));
+  const left = Math.min(Math.max(r0.left + dx, lo), hi - w);
+  d.el.style.transform = `translateX(${left - r0.left}px)`;
+  const center = left + w / 2;
+  d.others = d.items.map((_, i) => i).filter((i) => i !== d.idx);
+  const mid = (i) => d.rects[i].left + d.rects[i].width / 2;
+  d.k = d.others.filter((i) => mid(i) < center).length; // the slot: how many items end up left of it
+  d.others.forEach((i, j) => {
+    const shift = i < d.idx && j >= d.k ? w : i > d.idx && j < d.k ? -w : 0;
+    d.items[i].style.transform = shift ? `translateX(${shift}px)` : "";
+  });
+  // the group it would land in: that of the tab its centre is over (over a chip / ungrouped tab: none)
+  const over = d.others.find((i) => center >= d.rects[i].left && center < d.rects[i].right);
+  if (over != null) {
+    const it = d.items[over], ot = it.dataset.id ? state.tabs.find((t) => t.id === +it.dataset.id) : null;
+    d.group = ot ? ot.group ?? null : null;
   }
-  if (!items.length) return null;
-  const first = items[0].getBoundingClientRect(), last = items[items.length - 1].getBoundingClientRect();
-  if (x >= last.right) return { before: null, group: null, x: last.right, color: null };
-  if (x < first.left) return { before: order[0] ? order[0].id : null, group: null, x: first.left, color: null };
-  return null; // over the dragged tab's own empty slot: stay put
+  const g = (state.groups || []).find((x) => x.id === d.group);
+  d.el.classList.toggle("grouped", !!g);
+  if (g) d.el.style.setProperty("--g", GROUP_COLORS[g.color]);
 }
 
-function moveDrag(e) {
-  const dx = e.clientX - drag.x0;
-  if (!drag.moving && Math.abs(dx) < 6 && Math.abs(e.clientY - 18) < 12) return;
-  drag.moving = true;
-  drag.el.classList.add("dragging");
-  drag.el.style.transform = `translateX(${dx}px)`;
-  // Pulled well below the toolbar (into the page) or above the window: drop = open in a new window.
-  // The toolbar keeps getting the moves because the drag started here, even over the page.
-  drag.detach = state.tabs.length > 1 && (e.clientY > innerHeight + 40 || e.clientY < -25) ? { x: e.screenX, y: e.screenY } : null;
-  drag.el.classList.toggle("detaching", !!drag.detach);
-  drag.target = drag.detach ? null : dropTarget(e.clientX);
-  if (!drag.target) { marker.remove(); return; }
-  const strip = $("strip").getBoundingClientRect();
-  marker.style.left = `${drag.target.x - strip.left - 1}px`;
-  marker.style.background = drag.target.color || "var(--signal)";
-  if (!marker.isConnected) $("strip").append(marker);
+function tearOff(e) {
+  const d = drag;
+  d.torn = true;
+  const single = state.tabs.length < 2;
+  d.items.forEach((i) => { i.style.transform = ""; });
+  if (!single) d.el.classList.add("torn"); // the others close the gap
+  // keep the cursor where it grabbed the tab: on the new window's first tab, or (only tab) on this window
+  const r0 = d.rects[d.idx];
+  const ox = single ? d.x0 : $("tabs").getBoundingClientRect().left + (d.x0 - r0.left);
+  invoke("tear_start", { id: d.t.id, x: e.screenX, y: e.screenY, ox, oy: d.y0 });
 }
 
 function endDrag() {
   const d = drag;
+  if (!d) return;
   drag = null;
-  marker.remove();
+  cancelAnimationFrame(d.raf);
   d.el.onpointermove = d.el.onpointerup = d.el.onpointercancel = null;
   if (!d.moving) return;
   dragJustEnded = true; // the click that follows pointerup must not activate the tab
   setTimeout(() => { dragJustEnded = false; }, 0);
-  d.el.classList.remove("dragging", "detaching");
-  d.el.style.transform = "";
-  if (d.detach) invoke("detach_tab", { id: d.t.id, x: d.detach.x, y: d.detach.y });
-  else if (d.target) invoke("move_tab", { id: d.t.id, before: d.target.before, group: d.target.group });
-  renderTabs();
+  const done = () => { settling = false; $("tabs").classList.remove("reordering"); renderTabs(); };
+  if (d.torn) { invoke("tear_end", { x: d.last.screenX, y: d.last.screenY }); done(); return; }
+  if (d.k == null) { done(); return; }
+  // glide into the slot, then let the new order render in place
+  const r0 = d.rects[d.idx], w = r0.width, p = d.idx;
+  const left = d.k < p ? d.rects[d.others[d.k]].left : d.k === p ? r0.left : d.rects[d.others[d.k - 1]].right - w;
+  d.el.style.transition = "transform .16s ease";
+  d.el.style.transform = `translateX(${left - r0.left}px)`;
+  const next = d.items[d.others[d.k]];
+  const before = !next ? null : next.dataset.id ? +next.dataset.id
+    : (state.tabs.find((t) => t.group === +next.dataset.gid && t.id !== d.t.id) || {}).id ?? null;
+  settling = true;
+  invoke("move_tab", { id: d.t.id, before, group: d.group });
+  setTimeout(done, 170);
 }
+
+// A tab torn off another window (or this one) hovering over / dropped on this strip: Rust tells us where.
+function slotAt(x) {
+  const items = [...$("tabs").children].filter((e) => !e.classList.contains("torn"));
+  const firstOf = (gid) => (state.tabs.find((t) => t.group === gid) || {}).id ?? null;
+  const idOf = (e) => (e ? (e.dataset.id ? +e.dataset.id : firstOf(+e.dataset.gid)) : null);
+  for (let i = 0; i < items.length; i++) {
+    const e = items[i], r = e.getBoundingClientRect();
+    if (x < r.left || x >= r.right) continue;
+    if (e.dataset.gid) return { before: idOf(e), group: null, x: r.left, color: null };
+    const t = state.tabs.find((t) => t.id === +e.dataset.id), leftHalf = x < r.left + r.width / 2;
+    const g = t && (state.groups || []).find((g) => g.id === t.group);
+    return { before: leftHalf ? +e.dataset.id : idOf(items[i + 1]), group: t ? t.group ?? null : null,
+      x: leftHalf ? r.left : r.right, color: g ? GROUP_COLORS[g.color] : null };
+  }
+  const last = items[items.length - 1];
+  if (!last || x >= last.getBoundingClientRect().right) {
+    return { before: null, group: null, x: last ? last.getBoundingClientRect().right : $("tabs").getBoundingClientRect().left, color: null };
+  }
+  return { before: idOf(items[0]), group: null, x: items[0].getBoundingClientRect().left, color: null };
+}
+window.dropHint = (x) => {
+  if (x == null) { marker.remove(); return; }
+  const s = slotAt(x);
+  marker.style.left = `${s.x - $("strip").getBoundingClientRect().left - 1}px`;
+  marker.style.background = s.color || "var(--signal)";
+  if (!marker.isConnected) $("strip").append(marker);
+};
+window.dropForeign = (id, x) => {
+  marker.remove();
+  const s = slotAt(x);
+  invoke("attach_tab", { id, before: s.before, group: s.group });
+};
 
 const act = (cmd) => state.active != null && invoke(cmd, { id: state.active });
 $("newtab").onclick = () => invoke("new_tab", {}).then(() => $("url").focus());

@@ -33,7 +33,9 @@ body.mac #strip { padding-left: 80px; }
 #tabs { display: flex; min-width: 0; height: 30px; }
 #strip { position: relative; }
 .tab.dragging { z-index: 2; background: var(--hull-hi); color: var(--ice); box-shadow: 0 4px 14px #0008; }
-.tab.detaching { opacity: .55; outline: 1px dashed var(--signal); outline-offset: -3px; }
+#tabs.reordering > * { transition: transform .16s ease; }
+#tabs.reordering > .dragging { transition: none; }
+.tab.torn { flex: 0 0 0; width: 0; min-width: 0; padding: 0; opacity: 0; overflow: hidden; transition: flex-basis .16s ease, opacity .1s; }
 #dropmark { position: absolute; bottom: 3px; width: 2px; height: 24px; border-radius: 1px; pointer-events: none;
   box-shadow: 0 0 6px currentColor; }
 

@@ -34,6 +34,10 @@ struct Runtime {
     downloads: Mutex<HashMap<String, PathBuf>>,
     /// Last fully loaded URL per tab webview: a download starts like a navigation, so we roll back to this.
     committed: Mutex<HashMap<String, String>>,
+    /// A tab being dragged outside the strips: (window it lives in now, tab, grab offset x, y in that window).
+    tear: Mutex<Option<(String, TabId, f64, f64)>>,
+    /// Window whose strip currently shows a "drop here" mark for the torn tab.
+    hint: Mutex<Option<String>>,
 }
 
 /// Password vault runtime state. Plaintext only exists inside `with_vault`.
@@ -67,9 +71,14 @@ fn is_incognito_label(label: &str) -> bool { label.starts_with("itab-") }
 /// (window, tab) for a tab webview: the id is in the label, the window is whichever one holds that tab now.
 fn parse_label(app: &AppHandle, label: &str) -> Option<(String, TabId)> {
     let id: TabId = label.strip_prefix("tab-").or_else(|| label.strip_prefix("itab-"))?.parse().ok()?;
-    let map = app.state::<Browser>().inner().0.lock().unwrap();
-    map.iter().find(|(_, l)| l.get(id).is_some()).map(|(w, _)| (w.clone(), id))
+    Some((owner(app, id)?, id))
 }
+/// The window that holds tab `id` right now.
+fn owner(app: &AppHandle, id: TabId) -> Option<String> {
+    let map = app.state::<Browser>().inner().0.lock().unwrap();
+    map.iter().find(|(_, l)| l.get(id).is_some()).map(|(w, _)| w.clone())
+}
+
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
 
 /// Run `f` on a window's tab list (default value if the window is gone).
@@ -187,7 +196,9 @@ fn restore(app: &AppHandle) -> Res {
 /// `at` = top-left in screen points (torn-off tabs open where they were dropped).
 fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::Result<()> {
     let title = if is_incognito(win) { "R-Browser — Incognito" } else { "R-Browser" };
-    let mut builder = WindowBuilder::new(app, win).title(title).inner_size(1280.0, 800.0).min_inner_size(480.0, 300.0);
+    // Always dark, whatever the OS theme: pages get prefers-color-scheme: dark.
+    let mut builder = WindowBuilder::new(app, win).title(title).inner_size(1280.0, 800.0).min_inner_size(480.0, 300.0)
+        .theme(Some(tauri::Theme::Dark));
     if let Some((x, y)) = at { builder = builder.position(x, y); }
     // macOS: draw the tab strip where the title bar was (like Chrome); keeps webview coordinates exact.
     #[cfg(target_os = "macos")]
@@ -293,6 +304,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             emit(&a2, &win);
         })
         .on_download(move |wv, ev| on_download(&a3, &wv, ev));
+    builder = builder.initialization_script(include_str!("inject/dark.js"));
     if !is_incognito(win) { builder = builder.initialization_script(include_str!("inject/login.js")); }
     w.add_child(builder, LogicalPosition::new(0.0, BAR), LogicalSize::new(width, h))
 }
@@ -339,8 +351,8 @@ fn close(app: &AppHandle, win: &str, id: TabId) -> Res {
 
 /// Tear a tab off into a new window (top-left at `at`), moving the live page: no reload, forms and video keep going.
 /// Incognito tabs go to a new incognito window. Groups don't travel.
-fn detach(app: &AppHandle, from: &str, id: TabId, at: Option<(f64, f64)>) -> Res {
-    if tab_ids(app, from).len() < 2 { return Ok(()); } // ponytail: Chrome drags the whole window here; we leave it be
+fn detach(app: &AppHandle, from: &str, id: TabId, at: Option<(f64, f64)>) -> Result<String, String> {
+    if tab_ids(app, from).len() < 2 { return Ok(from.to_string()); } // the only tab: the window itself is what moves
     let to = if is_incognito(from) {
         format!("incognito-{}", NEXT_INCOGNITO.fetch_add(1, Ordering::SeqCst))
     } else {
@@ -361,14 +373,91 @@ fn detach(app: &AppHandle, from: &str, id: TabId, at: Option<(f64, f64)>) -> Res
     }
     activate(app, &to, id)?;
     layout(app, &to);
-    if let Some(w) = app.get_window(&to) { let _ = w.set_focus(); }
+    Ok(to)
+}
+
+/// Move tab `id` (from whichever window has it) into window `to`, before `before` / into `group`, live page and all.
+/// A window left with no tabs closes.
+fn attach(app: &AppHandle, to: &str, id: TabId, before: Option<TabId>, group: Option<GroupId>) -> Res {
+    let from = owner(app, id).ok_or("no such tab")?;
+    if from != to {
+        if is_incognito(&from) != is_incognito(to) { return Err("incognito and normal tabs don't mix".into()); }
+        let tab = with(app, &from, |l| l.take(id)).ok_or("no such tab")?;
+        with(app, to, |l| { l.adopt(tab); });
+        if let (Some(wv), Some(w)) = (app.get_webview(&label(to, id)), app.get_window(to)) { wv.reparent(&w).map_err(err)?; }
+        match with(app, &from, |l| l.active) {
+            Some(n) => activate(app, &from, n)?,
+            None => { if let Some(w) = app.get_window(&from) { let _ = w.destroy(); } }
+        }
+    }
+    with(app, to, |l| l.move_to(id, before, group));
+    activate(app, to, id)?;
+    layout(app, to);
+    if let Some(w) = app.get_window(to) { let _ = w.set_focus(); }
     Ok(())
 }
 
+/// Strip height that counts as "drop here" when a torn tab is released over a window (plus a little slack).
+const STRIP: f64 = 36.0;
+
+/// The browser window (other than `skip`, same incognito-ness) whose tab strip is under screen point (x, y),
+/// with x relative to that window.
+fn strip_at(app: &AppHandle, x: f64, y: f64, skip: &str, incognito: bool) -> Option<(String, f64)> {
+    app.windows().into_iter().find_map(|(lbl, w)| {
+        if lbl == skip || is_incognito(&lbl) != incognito || !w.is_visible().unwrap_or(false) || w.is_minimized().unwrap_or(false) { return None; }
+        let f = w.scale_factor().unwrap_or(1.0);
+        let (p, s) = (w.inner_position().ok()?.to_logical::<f64>(f), w.inner_size().ok()?.to_logical::<f64>(f));
+        (x >= p.x && x < p.x + s.width && y >= p.y - 8.0 && y < p.y + STRIP + 12.0).then(|| (lbl, x - p.x))
+    })
+}
+
+fn hint(app: &AppHandle, target: Option<(String, f64)>) {
+    let rt = app.state::<Runtime>();
+    let mut cur = rt.hint.lock().unwrap();
+    if let Some(old) = cur.take() {
+        if target.as_ref().map(|t| &t.0) != Some(&old) { if let Some(ui) = app.get_webview(&ui_label(&old)) { let _ = ui.eval("dropHint(null)"); } }
+    }
+    if let Some((w, x)) = target {
+        if let Some(ui) = app.get_webview(&ui_label(&w)) { let _ = ui.eval(&format!("dropHint({x})")); }
+        *cur = Some(w);
+    }
+}
+
+/// Dragged out of the strip: the tab gets its own window that follows the cursor (Chrome-style).
+/// `ox, oy` = where the cursor should sit inside that window. Returns true if a new window was made.
 #[tauri::command]
-async fn detach_tab(webview: Webview, app: AppHandle, window: Window, id: TabId, x: f64, y: f64) -> Res { trusted(&webview)?;
-    // Put the new window's tab strip under the cursor.
-    detach(&app, window.label(), id, Some((x - 120.0, (y - 18.0).max(0.0))))
+async fn tear_start(webview: Webview, app: AppHandle, window: Window, id: TabId, x: f64, y: f64, ox: f64, oy: f64) -> Result<bool, String> { trusted(&webview)?;
+    let from = window.label().to_string();
+    let to = detach(&app, &from, id, Some((x - ox, y - oy)))?;
+    *app.state::<Runtime>().tear.lock().unwrap() = Some((to.clone(), id, ox, oy));
+    Ok(to != from)
+}
+
+#[tauri::command]
+async fn tear_move(webview: Webview, app: AppHandle, x: f64, y: f64) -> Res { trusted(&webview)?;
+    let Some((to, _, ox, oy)) = app.state::<Runtime>().tear.lock().unwrap().clone() else { return Ok(()) };
+    if let Some(w) = app.get_window(&to) { let _ = w.set_position(LogicalPosition::new(x - ox, y - oy)); }
+    hint(&app, strip_at(&app, x, y, &to, is_incognito(&to)));
+    Ok(())
+}
+
+/// Released: over another window's strip -> that window's toolbar picks the exact slot and calls attach_tab;
+/// anywhere else -> the tab stays in its own window.
+#[tauri::command]
+async fn tear_end(webview: Webview, app: AppHandle, x: f64, y: f64) -> Res { trusted(&webview)?;
+    let Some((to, id, _, _)) = app.state::<Runtime>().tear.lock().unwrap().take() else { return Ok(()) };
+    hint(&app, None);
+    match strip_at(&app, x, y, &to, is_incognito(&to)) {
+        Some((target, cx)) => if let Some(ui) = app.get_webview(&ui_label(&target)) { ui.eval(&format!("dropForeign({id}, {cx})")).map_err(err)?; },
+        None => if let Some(w) = app.get_window(&to) { let _ = w.set_focus(); },
+    }
+    Ok(())
+}
+
+/// From a toolbar: put tab `id` (possibly from another window) into this window.
+#[tauri::command]
+async fn attach_tab(webview: Webview, app: AppHandle, window: Window, id: TabId, before: Option<TabId>, group: Option<GroupId>) -> Res { trusted(&webview)?;
+    attach(&app, window.label(), id, before, group)
 }
 
 fn tab_webview(app: &AppHandle, win: &str, id: TabId) -> Result<Webview, String> {
@@ -667,7 +756,10 @@ fn on_popup(app: &AppHandle, id: &str) -> Res {
         ("t", "add") => { let (t, g) = (num(3)?, num(4)?); with(app, win, |l| l.add_to_group(t, g)); emit(app, win); }
         ("t", "remove") => { let t = num(3)?; with(app, win, |l| l.remove_from_group(t)); emit(app, win); }
         ("t", "close") => close(app, win, num(3)?)?,
-        ("t", "newwin") => detach(app, win, num(3)?, None)?,
+        ("t", "newwin") => {
+            let to = detach(app, win, num(3)?, None)?;
+            if let Some(w) = app.get_window(&to) { let _ = w.set_focus(); }
+        }
         ("g", "rename") => rename_soon(app, win, num(3)?),
         ("g", "color") => {
             let (g, c) = (num(3)?, p.get(4).copied().unwrap_or_default());
@@ -916,7 +1008,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
-        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default() })
+        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
@@ -933,7 +1025,7 @@ pub fn run() {
             ui_ready, new_tab, new_incognito_window, close_tab, activate_tab, navigate, go_back, go_forward, reload,
             toggle_bookmark, find_in_page, suggest, history_search, history_clear, bookmarks_list, bookmark_remove,
             downloads_list, show_download,
-            tab_menu, group_menu, group_toggle, group_rename, move_tab, detach_tab,
+            tab_menu, group_menu, group_toggle, group_rename, move_tab, tear_start, tear_move, tear_end, attach_tab,
             page_event, password_save, password_never, password_dismiss, password_menu,
             passwords_list, password_reveal, password_delete, passwords_import
         ])

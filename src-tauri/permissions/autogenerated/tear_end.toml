@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tear-end"
+description = "Enables the tear_end command without any pre-configured scope."
+commands.allow = ["tear_end"]
+
+[[permission]]
+identifier = "deny-tear-end"
+description = "Denies the tear_end command without any pre-configured scope."
+commands.deny = ["tear_end"]

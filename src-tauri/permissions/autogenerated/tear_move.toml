@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-tear-move"
+description = "Enables the tear_move command without any pre-configured scope."
+commands.allow = ["tear_move"]
+
+[[permission]]
+identifier = "deny-tear-move"
+description = "Denies the tear_move command without any pre-configured scope."
+commands.deny = ["tear_move"]

@@ -41,6 +41,9 @@
     "allow-password-delete",
     "allow-passwords-import",
     "allow-move-tab",
-    "allow-detach-tab"
+    "allow-tear-start",
+    "allow-tear-move",
+    "allow-tear-end",
+    "allow-attach-tab"
   ]
 }
