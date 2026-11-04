@@ -88,13 +88,30 @@ impl Library {
     }
 }
 
-/// `dir/name`, or `dir/name (1).ext`, `(2)`... if taken. Strips any path parts from `name`.
+/// Make a server-suggested filename safe on every OS: no path parts, no characters that are
+/// reserved on Windows or that could break a command line (`,` `"` etc.), no control chars,
+/// no Windows device names, no trailing dots/spaces.
+pub fn safe_filename(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let mut out: String = base
+        .chars()
+        .map(|c| if c.is_control() || "<>:\"|?*,;".contains(c) { '_' } else { c })
+        .collect();
+    out = out.trim_end_matches(['.', ' ']).trim_start_matches(['.', ' ']).to_string();
+    let stem = out.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = ["CON", "PRN", "AUX", "NUL"].contains(&stem.as_str())
+        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit());
+    if reserved { out = format!("_{out}"); }
+    if out.is_empty() { "download".into() } else { out.chars().take(200).collect() }
+}
+
+/// `dir/name`, or `dir/name (1).ext`, `(2)`... if taken. The name is cleaned with `safe_filename`.
 pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let name = Path::new(name).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty() && *n != "..").unwrap_or("download");
-    let first = dir.join(name);
+    let name = safe_filename(name);
+    let first = dir.join(&name);
     if !first.exists() { return first; }
-    let p = Path::new(name);
-    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    let p = Path::new(&name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or(&name);
     let ext = p.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
     (1..).map(|i| dir.join(format!("{stem} ({i}){ext}"))).find(|c| !c.exists()).unwrap()
 }
@@ -148,6 +165,18 @@ mod tests {
         let s = l.suggest("git", 5);
         assert_eq!(s.iter().map(|s| s.url.as_str()).collect::<Vec<_>>(), vec!["https://github.com/", "https://gist.github.com/"]);
         assert!(s[0].bookmarked);
+    }
+
+    #[test]
+    fn safe_filename_cleans_dangerous_names() {
+        assert_eq!(safe_filename("report.pdf"), "report.pdf");
+        assert_eq!(safe_filename("a,/select,C:\\Windows\\x.exe"), "x.exe");
+        assert_eq!(safe_filename("evil\",name.exe"), "evil__name.exe");
+        assert_eq!(safe_filename("file.txt:Zone.Identifier"), "file.txt_Zone.Identifier");
+        assert_eq!(safe_filename("CON.txt"), "_CON.txt");
+        assert_eq!(safe_filename("...hidden. "), "hidden");
+        assert_eq!(safe_filename("a\u{0}b\nc"), "a_b_c");
+        assert_eq!(safe_filename(".."), "download");
     }
 
     #[test]

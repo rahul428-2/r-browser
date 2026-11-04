@@ -217,6 +217,7 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
         }
         DownloadEvent::Finished { url, success, .. } => {
             let path = rt.downloads.lock().unwrap().remove(url.as_str());
+            if let (Some(p), true) = (&path, success) { mark_from_internet(p, url.as_str()); }
             if !incognito {
                 lib(app, |l| if let Some(d) = l.downloads.iter_mut().rev().find(|d| d.url == url.as_str()) { d.done = true; d.ok = success; });
                 save_library_soon(app);
@@ -344,10 +345,36 @@ fn focus_ui(app: &AppHandle, win: &str, js: &str) {
     }
 }
 
+/// Defense in depth on top of Tauri's ACL (which already blocks remote origins): only the browser
+/// toolbar and the app's own rb:// pages may call commands. A website must never reach them.
+fn trusted(wv: &Webview) -> Result<(), String> {
+    if wv.label().ends_with("-ui") { return Ok(()); }
+    let url = wv.url().map(|u| u.to_string()).unwrap_or_default();
+    if to_rb(&url).is_empty() || to_rb(&url).starts_with("rb://") { Ok(()) } else { Err("not allowed".into()) }
+}
+
+/// Tell the OS this file came from the internet, so Gatekeeper / SmartScreen check it before it opens.
+fn mark_from_internet(path: &std::path::Path, url: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let secs = now_secs();
+        let _ = std::process::Command::new("/usr/bin/xattr")
+            .args(["-w", "com.apple.quarantine", &format!("0081;{secs:08x};R-Browser;")])
+            .arg(path)
+            .status();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let zone = format!("[ZoneTransfer]\r\nZoneId=3\r\nHostUrl={url}\r\n");
+        let _ = std::fs::write(format!("{}:Zone.Identifier", path.display()), zone);
+    }
+    let _ = (path, url);
+}
+
 // ---- commands (`window` = the window the calling page lives in) ----
 
 #[tauri::command]
-async fn ui_ready(app: AppHandle, window: Window) -> Res {
+async fn ui_ready(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
     let win = window.label().to_string();
     if win == MAIN {
         if !RESTORED.load(Ordering::SeqCst) {
@@ -364,7 +391,7 @@ async fn ui_ready(app: AppHandle, window: Window) -> Res {
 }
 
 #[tauri::command]
-async fn new_tab(app: AppHandle, window: Window, url: Option<String>) -> Res {
+async fn new_tab(webview: Webview, app: AppHandle, window: Window, url: Option<String>) -> Res { trusted(&webview)?;
     let win = window.label();
     open_tab(&app, win, &url.map(|u| resolve(&u)).unwrap_or_default())?;
     if let Some(ui) = app.get_webview(&ui_label(win)) { let _ = ui.set_focus(); }
@@ -372,16 +399,16 @@ async fn new_tab(app: AppHandle, window: Window, url: Option<String>) -> Res {
 }
 
 #[tauri::command]
-async fn new_incognito_window(app: AppHandle) -> Res { new_incognito(&app) }
+async fn new_incognito_window(webview: Webview, app: AppHandle) -> Res { trusted(&webview)?; new_incognito(&app) }
 
 #[tauri::command]
-async fn close_tab(app: AppHandle, window: Window, id: TabId) -> Res { close(&app, window.label(), id) }
+async fn close_tab(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?; close(&app, window.label(), id) }
 
 #[tauri::command]
-async fn activate_tab(app: AppHandle, window: Window, id: TabId) -> Res { activate(&app, window.label(), id) }
+async fn activate_tab(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?; activate(&app, window.label(), id) }
 
 #[tauri::command]
-async fn navigate(app: AppHandle, window: Window, id: TabId, input: String) -> Res {
+async fn navigate(webview: Webview, app: AppHandle, window: Window, id: TabId, input: String) -> Res { trusted(&webview)?;
     let win = window.label();
     let url = resolve(&input);
     with(&app, win, |l| if let Some(t) = l.get_mut(id) { t.url = url.clone(); });
@@ -399,48 +426,50 @@ async fn navigate(app: AppHandle, window: Window, id: TabId, input: String) -> R
 }
 
 #[tauri::command]
-async fn go_back(app: AppHandle, window: Window, id: TabId) -> Res { eval_in(&app, window.label(), id, "history.back()") }
+async fn go_back(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?; eval_in(&app, window.label(), id, "history.back()") }
 
 #[tauri::command]
-async fn go_forward(app: AppHandle, window: Window, id: TabId) -> Res { eval_in(&app, window.label(), id, "history.forward()") }
+async fn go_forward(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?; eval_in(&app, window.label(), id, "history.forward()") }
 
 #[tauri::command]
-async fn reload(app: AppHandle, window: Window, id: TabId) -> Res { tab_webview(&app, window.label(), id)?.reload().map_err(err) }
+async fn reload(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?; tab_webview(&app, window.label(), id)?.reload().map_err(err) }
 
 #[tauri::command]
-async fn toggle_bookmark(app: AppHandle, window: Window) -> Res { toggle_bookmark_active(&app, window.label()) }
+async fn toggle_bookmark(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?; toggle_bookmark_active(&app, window.label()) }
 
 #[tauri::command]
-async fn find_in_page(app: AppHandle, window: Window, id: TabId, query: String, backwards: bool) -> Res {
+async fn find_in_page(webview: Webview, app: AppHandle, window: Window, id: TabId, query: String, backwards: bool) -> Res { trusted(&webview)?;
     // JSON-encode the query so it can't break out of the JS string.
     let js = format!("window.find({}, false, {backwards}, true)", serde_json::to_string(&query).map_err(err)?);
     eval_in(&app, window.label(), id, &js)
 }
 
 #[tauri::command]
-fn suggest(app: AppHandle, query: String) -> Vec<Suggestion> { lib(&app, |l| l.suggest(&query, 8)) }
+fn suggest(webview: Webview, app: AppHandle, query: String) -> Result<Vec<Suggestion>, String> { trusted(&webview)?; Ok(lib(&app, |l| l.suggest(&query, 8))) }
 
 #[tauri::command]
-fn history_search(app: AppHandle, query: String) -> Vec<Visit> { lib(&app, |l| l.search_history(&query, 500).into_iter().cloned().collect()) }
+fn history_search(webview: Webview, app: AppHandle, query: String) -> Result<Vec<Visit>, String> { trusted(&webview)?; Ok(lib(&app, |l| l.search_history(&query, 500).into_iter().cloned().collect())) }
 
 #[tauri::command]
-fn history_clear(app: AppHandle) { lib(&app, |l| l.clear_history()); save_library_soon(&app); }
+fn history_clear(webview: Webview, app: AppHandle) -> Res { trusted(&webview)?; lib(&app, |l| l.clear_history()); save_library_soon(&app); Ok(()) }
 
 #[tauri::command]
-fn bookmarks_list(app: AppHandle) -> Vec<Bookmark> { lib(&app, |l| l.bookmarks.iter().rev().cloned().collect()) }
+fn bookmarks_list(webview: Webview, app: AppHandle) -> Result<Vec<Bookmark>, String> { trusted(&webview)?; Ok(lib(&app, |l| l.bookmarks.iter().rev().cloned().collect())) }
 
 #[tauri::command]
-fn bookmark_remove(app: AppHandle, url: String) {
+fn bookmark_remove(webview: Webview, app: AppHandle, url: String) -> Res {
+    trusted(&webview)?;
     lib(&app, |l| l.bookmarks.retain(|b| b.url != url));
     save_library_soon(&app);
+    Ok(())
 }
 
 #[tauri::command]
-fn downloads_list(app: AppHandle) -> Vec<Download> { lib(&app, |l| l.downloads.iter().rev().cloned().collect()) }
+fn downloads_list(webview: Webview, app: AppHandle) -> Result<Vec<Download>, String> { trusted(&webview)?; Ok(lib(&app, |l| l.downloads.iter().rev().cloned().collect())) }
 
 /// Reveal a finished download in the file manager. Never opens/executes the file itself.
 #[tauri::command]
-fn show_download(app: AppHandle, path: String) -> Res {
+fn show_download(webview: Webview, app: AppHandle, path: String) -> Res { trusted(&webview)?;
     let known = lib(&app, |l| l.downloads.iter().any(|d| d.path == path));
     if !known { return Err("not a download".into()); }
     let p = PathBuf::from(&path);
