@@ -9,12 +9,12 @@
   --glint: #7fe3ff;   /* the wolf's eye: glow */
   --amber: #f5b54a;   /* warnings only */
   --strip-h: 36px;
-  --bar-h: 43px;
+  --bar-h: 47px;
 }
 
 * { box-sizing: border-box; margin: 0; }
 html, body {
-  height: 80px; overflow: hidden; background: var(--abyss); color: var(--ice);
+  height: 84px; overflow: hidden; background: var(--abyss); color: var(--ice);
   font: 12.5px/1.2 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
   -webkit-font-smoothing: antialiased; user-select: none; cursor: default;
 }
@@ -86,8 +86,8 @@ body.mac #strip { padding-left: 80px; }
 /* ---------- toolbar ---------- */
 #bar { height: var(--bar-h); display: flex; align-items: center; gap: 2px; padding: 0 10px 0 8px;
   background: var(--hull); }
-#omni { flex: 1; position: relative; display: flex; align-items: center; gap: 8px; height: 31px;
-  margin-left: 6px; padding: 0 12px 0 5px; border-radius: 16px; background: var(--well);
+#omni { flex: 1; position: relative; display: flex; align-items: center; gap: 8px; height: 36px;
+  margin-left: 6px; padding: 0 12px 0 5px; border-radius: 18px; background: var(--well);
   border: 1px solid #1a2639; transition: border-color .15s, box-shadow .15s; cursor: text; }
 #omni:focus-within { border-color: var(--signal);
   box-shadow: 0 0 0 3px #3b9eff26, 0 0 14px #7fe3ff1f; }
@@ -98,7 +98,7 @@ body.mac #strip { padding-left: 80px; }
 #omni[data-state="secure"] #chip { color: var(--signal); background: #3b9eff1a; }
 #omni[data-state="insecure"] #chip { color: var(--amber); background: #f5b54a1f; }
 
-#url, #pretty { flex: 1; min-width: 0; font: 14px/1 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+#url, #pretty { flex: 1; min-width: 0; font: 15px/1 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
   letter-spacing: .1px; }
 #url { background: none; border: 0; outline: 0; color: var(--ice); user-select: text; caret-color: var(--glint); }
 #url::placeholder { color: #5b6880; }
@@ -133,8 +133,8 @@ body.mac #strip { padding-left: 80px; }
 #savepw .icon svg { width: 12px; height: 12px; }
 #savepw:not([hidden]) ~ #toast { margin-left: 0; }
 
-#find { display: flex; align-items: center; gap: 2px; height: 31px; margin-left: 8px; padding: 0 4px 0 12px;
-  width: 300px; border-radius: 16px; background: var(--well); border: 1px solid var(--signal); }
+#find { display: flex; align-items: center; gap: 2px; height: 36px; margin-left: 8px; padding: 0 4px 0 12px;
+  width: 300px; border-radius: 18px; background: var(--well); border: 1px solid var(--signal); }
 #find[hidden] { display: none; }
 #findq { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--ice); font: 13px system-ui, sans-serif; }
 #find button.icon { width: 24px; height: 24px; }

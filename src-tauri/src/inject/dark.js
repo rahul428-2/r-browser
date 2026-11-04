@@ -1,8 +1,9 @@
-// R-Browser auto dark mode: pages that are light even though we ask for dark (prefers-color-scheme) get their
-// colours inverted. Photos/videos are inverted back so they look normal. The filter sits on <html>: the spec
-// exempts the root element from the "filter makes a containing block" rule, so position:fixed headers keep working.
+// R-Browser: dark Google search results. Google serves this engine a basic, light-only results page, so we
+// invert its colours (photos, videos and logos are inverted back so they look normal). Only Google's /search
+// page: every other website is left exactly as it is (Rahul's call). The filter sits on <html>, which the spec
+// exempts from the "filter makes a containing block" rule, so fixed headers keep working.
 (() => {
-  if (window.top !== window) return; // the filter on the top page already covers its frames
+  if (window.top !== window || location.pathname !== "/search" || !/^www\.google\.[a-z]{2,3}(\.[a-z]{2})?$/.test(location.hostname)) return;
   const ATTR = "data-rb-dark";
   const css = `
 html[${ATTR}] { filter: invert(.9) hue-rotate(180deg) !important; background: #fff !important; }

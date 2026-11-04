@@ -18,7 +18,7 @@ use tauri::webview::{DownloadEvent, PageLoadEvent, WebviewBuilder};
 use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl, Window, WindowEvent};
 
-const BAR: f64 = 80.0; // tab strip 36 + toolbar 43 + guard line 1
+const BAR: f64 = 84.0; // tab strip 36 + toolbar 47 + guard line 1
 const MAIN: &str = "main";
 const ZOOM_STEPS: [f64; 9] = [0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0];
 
@@ -196,9 +196,7 @@ fn restore(app: &AppHandle) -> Res {
 /// `at` = top-left in screen points (torn-off tabs open where they were dropped).
 fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::Result<()> {
     let title = if is_incognito(win) { "R-Browser — Incognito" } else { "R-Browser" };
-    // Always dark, whatever the OS theme: pages get prefers-color-scheme: dark.
-    let mut builder = WindowBuilder::new(app, win).title(title).inner_size(1280.0, 800.0).min_inner_size(480.0, 300.0)
-        .theme(Some(tauri::Theme::Dark));
+    let mut builder = WindowBuilder::new(app, win).title(title).inner_size(1280.0, 800.0).min_inner_size(480.0, 300.0);
     if let Some((x, y)) = at { builder = builder.position(x, y); }
     // macOS: draw the tab strip where the title bar was (like Chrome); keeps webview coordinates exact.
     #[cfg(target_os = "macos")]
