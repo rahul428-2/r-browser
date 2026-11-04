@@ -88,6 +88,13 @@ impl Library {
     }
 }
 
+/// Invisible / direction-changing characters (Unicode Cf) used to disguise names,
+/// e.g. "invoice\u{202E}fdp.exe" displays as "invoiceexe.pdf".
+fn is_invisible(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x061C | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB)
+}
+
 /// Make a server-suggested filename safe on every OS: no path parts, no characters that are
 /// reserved on Windows or that could break a command line (`,` `"` etc.), no control chars,
 /// no Windows device names, no trailing dots/spaces.
@@ -95,7 +102,7 @@ pub fn safe_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let mut out: String = base
         .chars()
-        .map(|c| if c.is_control() || "<>:\"|?*,;".contains(c) { '_' } else { c })
+        .map(|c| if c.is_control() || is_invisible(c) || "<>:\"|?*,;".contains(c) { '_' } else { c })
         .collect();
     out = out.trim_end_matches(['.', ' ']).trim_start_matches(['.', ' ']).to_string();
     let stem = out.split('.').next().unwrap_or("").to_ascii_uppercase();
@@ -177,6 +184,8 @@ mod tests {
         assert_eq!(safe_filename("...hidden. "), "hidden");
         assert_eq!(safe_filename("a\u{0}b\nc"), "a_b_c");
         assert_eq!(safe_filename(".."), "download");
+        assert_eq!(safe_filename("invoice\u{202E}fdp.exe"), "invoice_fdp.exe");
+        assert_eq!(safe_filename("a\u{200B}b\u{FEFF}.zip"), "a_b_.zip");
     }
 
     #[test]
