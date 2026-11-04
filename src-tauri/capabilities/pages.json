@@ -3,8 +3,8 @@
   "identifier": "pages",
   "description": "The app's own rb:// pages (history, bookmarks, passwords...) when loaded in a tab. Local origin only; every command still checks trusted().",
   "webviews": [
-    "main-tab-*",
-    "incognito-*-tab-*"
+    "tab-*",
+    "itab-*"
   ],
   "permissions": [
     "allow-ui-ready",

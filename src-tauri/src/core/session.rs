@@ -17,6 +17,8 @@ pub struct Session {
     pub tabs: Vec<SavedTab>,
     pub active: usize,
     pub groups: Vec<Group>,
+    /// The other normal windows (each with its own tabs and groups).
+    pub extra: Vec<Session>,
 }
 
 impl Session {
@@ -34,7 +36,16 @@ impl Session {
                 group: t.group,
             })
             .collect();
-        Session { tabs, active, groups: list.groups.clone() }
+        Session { tabs, active, groups: list.groups.clone(), extra: vec![] }
+    }
+
+    /// All normal windows; empty ones are dropped and the first remaining one becomes the main window.
+    pub fn from_windows(lists: &[&TabList]) -> Session {
+        let mut all: Vec<Session> = lists.iter().map(|l| Session::from_tabs(l)).filter(|s| !s.tabs.is_empty()).collect();
+        if all.is_empty() { return Session::default(); }
+        let mut main = all.remove(0);
+        main.extra = all;
+        main
     }
 
     /// Recreate the saved tabs (all frozen) and groups in `list`; returns the new tab ids in order.
@@ -94,7 +105,7 @@ mod tests {
     #[test]
     fn roundtrip() {
         let p = dir().join("session.json");
-        let s = Session { tabs: vec![SavedTab { url: "https://a.com/".into(), title: "A".into(), pinned: true, scroll_y: 120.0, group: None }], active: 0, groups: vec![] };
+        let s = Session { tabs: vec![SavedTab { url: "https://a.com/".into(), title: "A".into(), pinned: true, scroll_y: 120.0, group: None }], active: 0, groups: vec![], extra: vec![] };
         save_atomic(&p, &s).unwrap();
         assert_eq!(load(&p), Some(s));
     }
@@ -117,6 +128,21 @@ mod tests {
         assert_eq!(fresh.get(ids[0]).unwrap().group, None);
         assert_eq!(fresh.groups.len(), 1);
         assert_eq!((fresh.groups[0].id, fresh.groups[0].name.as_str(), fresh.groups[0].collapsed), (g2, "Work", true));
+    }
+
+    #[test]
+    fn every_normal_window_saved_and_restored() {
+        let (mut w1, mut w2, empty) = (TabList::default(), TabList::default(), TabList::default());
+        w1.open("https://a.com/", false);
+        w2.open("https://b.com/", false);
+        w2.open("https://c.com/", false);
+        let s = Session::from_windows(&[&empty, &w1, &w2]);
+        assert_eq!(s.tabs.len(), 1, "empty windows dropped, first non-empty is the main one");
+        assert_eq!(s.extra.len(), 1);
+        assert_eq!(s.extra[0].tabs.len(), 2);
+        let p = dir().join("multi.json");
+        save_atomic(&p, &s).unwrap();
+        assert_eq!(load::<Session>(&p), Some(s));
     }
 
     #[test]

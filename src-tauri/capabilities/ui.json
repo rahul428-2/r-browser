@@ -4,7 +4,8 @@
   "description": "Browser chrome (tab strip + URL bar). Local app pages only; remote pages get nothing here.",
   "webviews": [
     "main-ui",
-    "incognito-*-ui"
+    "incognito-*-ui",
+    "window-*-ui"
   ],
   "permissions": [
     "core:default",
@@ -39,6 +40,7 @@
     "allow-password-reveal",
     "allow-password-delete",
     "allow-passwords-import",
-    "allow-move-tab"
+    "allow-move-tab",
+    "allow-detach-tab"
   ]
 }

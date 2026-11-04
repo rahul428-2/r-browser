@@ -320,7 +320,7 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 
 - `core/vault.rs` (pure, tested): `Entry`, `Vault{entries}`, `origin_of`, `add/find/remove`, `seal/open` (`RBV1` | nonce | AES-256-GCM, AAD `RBV1`), `import_google_csv(&str)`, `shred(path)`.
 - `platform.rs`: `authenticate(reason)` (LocalAuthentication, Touch ID or password), `vault_key(create)` (keyring; creates the key only when no vault.bin exists, so a lost key never overwrites a vault).
-- App ACL manifest in `build.rs` lists every command; `capabilities/remote.json` grants remote `main-tab-*` pages only `allow-page-event`.
+- App ACL manifest in `build.rs` lists every command; `capabilities/remote.json` grants remote `tab-*` pages (normal windows; incognito tabs are `itab-*`) only `allow-page-event`.
 - `inject/login.js` reports `login-form` and `login-submitted`; Rust takes tab + origin from the webview, never the payload.
 - Tests: `seal_open_roundtrip`, `wrong_key_fails`, `tampered_blob_fails`, `find_exact_origin_only`, `add_updates_same_user`, `import_google_csv_parses_sample`, `shred_removes_file`.
 

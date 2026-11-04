@@ -204,11 +204,15 @@ function dropTarget(x) {
 
 function moveDrag(e) {
   const dx = e.clientX - drag.x0;
-  if (!drag.moving && Math.abs(dx) < 6) return;
+  if (!drag.moving && Math.abs(dx) < 6 && Math.abs(e.clientY - 18) < 12) return;
   drag.moving = true;
   drag.el.classList.add("dragging");
   drag.el.style.transform = `translateX(${dx}px)`;
-  drag.target = dropTarget(e.clientX);
+  // Pulled well below the toolbar (into the page) or above the window: drop = open in a new window.
+  // The toolbar keeps getting the moves because the drag started here, even over the page.
+  drag.detach = state.tabs.length > 1 && (e.clientY > innerHeight + 40 || e.clientY < -25) ? { x: e.screenX, y: e.screenY } : null;
+  drag.el.classList.toggle("detaching", !!drag.detach);
+  drag.target = drag.detach ? null : dropTarget(e.clientX);
   if (!drag.target) { marker.remove(); return; }
   const strip = $("strip").getBoundingClientRect();
   marker.style.left = `${drag.target.x - strip.left - 1}px`;
@@ -224,9 +228,10 @@ function endDrag() {
   if (!d.moving) return;
   dragJustEnded = true; // the click that follows pointerup must not activate the tab
   setTimeout(() => { dragJustEnded = false; }, 0);
-  d.el.classList.remove("dragging");
+  d.el.classList.remove("dragging", "detaching");
   d.el.style.transform = "";
-  if (d.target) invoke("move_tab", { id: d.t.id, before: d.target.before, group: d.target.group });
+  if (d.detach) invoke("detach_tab", { id: d.t.id, x: d.detach.x, y: d.detach.y });
+  else if (d.target) invoke("move_tab", { id: d.t.id, before: d.target.before, group: d.target.group });
   renderTabs();
 }
 

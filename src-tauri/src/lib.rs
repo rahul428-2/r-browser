@@ -56,13 +56,19 @@ static SESSION_GEN: AtomicU64 = AtomicU64::new(0);
 static LIBRARY_GEN: AtomicU64 = AtomicU64::new(0);
 static RESTORED: AtomicBool = AtomicBool::new(false);
 static NEXT_INCOGNITO: AtomicU64 = AtomicU64::new(1);
+static NEXT_WINDOW: AtomicU64 = AtomicU64::new(1);
 
 fn is_incognito(win: &str) -> bool { win.starts_with("incognito-") }
 fn ui_label(win: &str) -> String { format!("{win}-ui") }
-fn label(win: &str, id: TabId) -> String { format!("{win}-tab-{id}") }
-fn parse_label(label: &str) -> Option<(String, TabId)> {
-    let (win, id) = label.rsplit_once("-tab-")?;
-    Some((win.to_string(), id.parse().ok()?))
+/// Tab webview labels don't name their window (`tab-7`, incognito `itab-7`): a torn-off tab moves to another
+/// window with its live webview. Tab ids are unique across windows. Capabilities match these prefixes.
+fn label(win: &str, id: TabId) -> String { if is_incognito(win) { format!("itab-{id}") } else { format!("tab-{id}") } }
+fn is_incognito_label(label: &str) -> bool { label.starts_with("itab-") }
+/// (window, tab) for a tab webview: the id is in the label, the window is whichever one holds that tab now.
+fn parse_label(app: &AppHandle, label: &str) -> Option<(String, TabId)> {
+    let id: TabId = label.strip_prefix("tab-").or_else(|| label.strip_prefix("itab-"))?.parse().ok()?;
+    let map = app.state::<Browser>().inner().0.lock().unwrap();
+    map.iter().find(|(_, l)| l.get(id).is_some()).map(|(w, _)| (w.clone(), id))
 }
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
 
@@ -114,7 +120,7 @@ fn emit(app: &AppHandle, win: &str) {
     let url = list.active.and_then(|a| list.get(a)).map(|t| t.url.clone()).unwrap_or_default();
     let bookmarked = lib(app, |l| l.is_bookmarked(&url));
     let _ = app.emit_to(ui_label(win), "tabs-changed", UiState { win: win.to_string(), list, bookmarked });
-    if win == MAIN { save_session_soon(app); }
+    if !is_incognito(win) { save_session_soon(app); }
 }
 
 // ---- persistence (debounced ~1 s; incognito is never saved) ----
@@ -136,12 +142,21 @@ fn debounce(gen: &'static AtomicU64, app: &AppHandle, save: fn(&AppHandle)) {
 
 fn save_session_soon(app: &AppHandle) {
     if !RESTORED.load(Ordering::SeqCst) { return; } // never overwrite the old session before restoring it
-    debounce(&SESSION_GEN, app, |app| {
-        let snap = with(app, MAIN, |l| Session::from_tabs(l));
-        if let Some(p) = data_file(app, "session.json") {
-            if let Err(e) = session::save_atomic(&p, &snap) { eprintln!("session save failed: {e}"); }
-        }
-    });
+    debounce(&SESSION_GEN, app, save_session_now);
+}
+
+/// All normal windows, main first. Incognito windows are never saved.
+fn save_session_now(app: &AppHandle) {
+    SESSION_GEN.fetch_add(1, Ordering::SeqCst); // supersede a pending debounced save
+    let snap = {
+        let map = app.state::<Browser>().inner().0.lock().unwrap();
+        let mut wins: Vec<&String> = map.keys().filter(|w| !is_incognito(w)).collect();
+        wins.sort_by_key(|w| (w.as_str() != MAIN, w.len(), (*w).clone()));
+        Session::from_windows(&wins.iter().map(|w| &map[*w]).collect::<Vec<_>>())
+    };
+    if let Some(p) = data_file(app, "session.json") {
+        if let Err(e) = session::save_atomic(&p, &snap) { eprintln!("session save failed: {e}"); }
+    }
 }
 
 fn save_library_soon(app: &AppHandle) {
@@ -157,17 +172,23 @@ fn save_library_soon(app: &AppHandle) {
 fn restore(app: &AppHandle) -> Res {
     let Some(saved) = data_file(app, "session.json").and_then(|p| session::load::<Session>(&p)) else { return Ok(()) };
     let ids: Vec<TabId> = with(app, MAIN, |l| saved.restore_into(l));
-    match ids.get(saved.active).or(ids.first()) {
-        Some(&id) => activate(app, MAIN, id),
-        None => Ok(()),
+    if let Some(&id) = ids.get(saved.active).or(ids.first()) { activate(app, MAIN, id)?; }
+    for extra in &saved.extra {
+        let win = format!("window-{}", NEXT_WINDOW.fetch_add(1, Ordering::SeqCst));
+        create_window(app, &win, None).map_err(err)?;
+        let ids = with(app, &win, |l| extra.restore_into(l));
+        if let Some(&id) = ids.get(extra.active).or(ids.first()) { activate(app, &win, id)?; }
     }
+    Ok(())
 }
 
 // ---- windows & tabs ----
 
-fn create_window(app: &AppHandle, win: &str) -> tauri::Result<()> {
+/// `at` = top-left in screen points (torn-off tabs open where they were dropped).
+fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::Result<()> {
     let title = if is_incognito(win) { "R-Browser — Incognito" } else { "R-Browser" };
-    let builder = WindowBuilder::new(app, win).title(title).inner_size(1280.0, 800.0).min_inner_size(480.0, 300.0);
+    let mut builder = WindowBuilder::new(app, win).title(title).inner_size(1280.0, 800.0).min_inner_size(480.0, 300.0);
+    if let Some((x, y)) = at { builder = builder.position(x, y); }
     // macOS: draw the tab strip where the title bar was (like Chrome); keeps webview coordinates exact.
     #[cfg(target_os = "macos")]
     let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
@@ -201,8 +222,8 @@ fn target(url: &str) -> WebviewUrl {
 }
 
 fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
-    let win = parse_label(wv.label()).map(|(w, _)| w).unwrap_or_else(|| MAIN.into());
-    let incognito = is_incognito(&win);
+    let win = parse_label(app, wv.label()).map(|(w, _)| w).unwrap_or_else(|| MAIN.into());
+    let incognito = is_incognito(&win) || is_incognito_label(wv.label());
     let rt = app.state::<Runtime>();
     match ev {
         DownloadEvent::Requested { url, destination } => {
@@ -214,7 +235,7 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
             let path = unique_path(&dir, &suggested);
             *destination = path.clone();
             rt.downloads.lock().unwrap().insert(url.to_string(), path.clone());
-            if let (Some((w, id)), Some(prev)) = (parse_label(wv.label()), rt.committed.lock().unwrap().get(wv.label()).cloned()) {
+            if let (Some((w, id)), Some(prev)) = (parse_label(app, wv.label()), rt.committed.lock().unwrap().get(wv.label()).cloned()) {
                 with(app, &w, |l| if let Some(t) = l.get_mut(id) { t.url = prev; t.loading = false; });
                 emit(app, &w);
             }
@@ -247,7 +268,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
         // Incognito: non-persistent data store — nothing written to disk.
         .incognito(is_incognito(win))
         .on_page_load(move |wv, p| {
-            let Some((win, id)) = parse_label(wv.label()) else { return };
+            let Some((win, id)) = parse_label(&a1, wv.label()) else { return };
             let url = to_rb(p.url().as_str());
             let started = p.event() == PageLoadEvent::Started;
             let title = with(&a1, &win, |l| l.get_mut(id).map(|t| {
@@ -266,7 +287,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             emit(&a1, &win);
         })
         .on_document_title_changed(move |wv, title| {
-            let Some((win, id)) = parse_label(wv.label()) else { return };
+            let Some((win, id)) = parse_label(&a2, wv.label()) else { return };
             let url = with(&a2, &win, |l| l.get_mut(id).map(|t| { t.title = title.clone(); t.url.clone() })).unwrap_or_default();
             if !is_incognito(&win) { lib(&a2, |l| l.set_title(&url, &title)); }
             emit(&a2, &win);
@@ -308,15 +329,46 @@ fn close(app: &AppHandle, win: &str, id: TabId) -> Res {
     match with(app, win, |l| l.close(id)) {
         Some(n) => activate(app, win, n),
         None => {
-            // Last tab closed -> close the window, like Chrome.
-            if win == MAIN {
-                SESSION_GEN.fetch_add(1, Ordering::SeqCst); // cancel a pending save, then save empty now
-                if let Some(p) = data_file(app, "session.json") { let _ = session::save_atomic(&p, &Session::default()); }
-            }
+            // Last tab closed -> close the window, like Chrome. Save now: this window drops out of the session.
+            if !is_incognito(win) { save_session_now(app); }
             if app.windows().len() <= 1 { app.exit(0); } else if let Some(w) = app.get_window(win) { let _ = w.destroy(); }
             Ok(())
         }
     }
+}
+
+/// Tear a tab off into a new window (top-left at `at`), moving the live page: no reload, forms and video keep going.
+/// Incognito tabs go to a new incognito window. Groups don't travel.
+fn detach(app: &AppHandle, from: &str, id: TabId, at: Option<(f64, f64)>) -> Res {
+    if tab_ids(app, from).len() < 2 { return Ok(()); } // ponytail: Chrome drags the whole window here; we leave it be
+    let to = if is_incognito(from) {
+        format!("incognito-{}", NEXT_INCOGNITO.fetch_add(1, Ordering::SeqCst))
+    } else {
+        format!("window-{}", NEXT_WINDOW.fetch_add(1, Ordering::SeqCst))
+    };
+    let at = at.or_else(|| {
+        let w = app.get_window(from)?;
+        let p = w.outer_position().ok()?.to_logical::<f64>(w.scale_factor().unwrap_or(1.0));
+        Some((p.x + 40.0, p.y + 40.0))
+    });
+    create_window(app, &to, at).map_err(err)?;
+    let tab = with(app, from, |l| l.take(id)).ok_or("no such tab")?;
+    with(app, &to, |l| { l.adopt(tab); });
+    if let (Some(wv), Some(w)) = (app.get_webview(&label(from, id)), app.get_window(&to)) { wv.reparent(&w).map_err(err)?; }
+    match with(app, from, |l| l.active) {
+        Some(n) => activate(app, from, n)?,
+        None => emit(app, from),
+    }
+    activate(app, &to, id)?;
+    layout(app, &to);
+    if let Some(w) = app.get_window(&to) { let _ = w.set_focus(); }
+    Ok(())
+}
+
+#[tauri::command]
+async fn detach_tab(webview: Webview, app: AppHandle, window: Window, id: TabId, x: f64, y: f64) -> Res { trusted(&webview)?;
+    // Put the new window's tab strip under the cursor.
+    detach(&app, window.label(), id, Some((x - 120.0, (y - 18.0).max(0.0))))
 }
 
 fn tab_webview(app: &AppHandle, win: &str, id: TabId) -> Result<Webview, String> {
@@ -326,7 +378,7 @@ fn eval_in(app: &AppHandle, win: &str, id: TabId, js: &str) -> Res { tab_webview
 
 fn new_incognito(app: &AppHandle) -> Res {
     let win = format!("incognito-{}", NEXT_INCOGNITO.fetch_add(1, Ordering::SeqCst));
-    create_window(app, &win).map_err(err)
+    create_window(app, &win, None).map_err(err)
 }
 
 /// The window the user is looking at (for menu shortcuts).
@@ -542,6 +594,7 @@ async fn tab_menu(webview: Webview, app: AppHandle, window: Window, id: TabId) -
         m = m.item(&sub.build().map_err(err)?);
     }
     if cur.is_some() { m = m.item(&item("remove", "Remove from Group").map_err(err)?); }
+    if tab_ids(&app, &win).len() > 1 { m = m.item(&item("newwin", "Move Tab to New Window").map_err(err)?); }
     let menu = m.separator().item(&item("close", "Close Tab").map_err(err)?).build().map_err(err)?;
     window.popup_menu(&menu).map_err(err)
 }
@@ -614,6 +667,7 @@ fn on_popup(app: &AppHandle, id: &str) -> Res {
         ("t", "add") => { let (t, g) = (num(3)?, num(4)?); with(app, win, |l| l.add_to_group(t, g)); emit(app, win); }
         ("t", "remove") => { let t = num(3)?; with(app, win, |l| l.remove_from_group(t)); emit(app, win); }
         ("t", "close") => close(app, win, num(3)?)?,
+        ("t", "newwin") => detach(app, win, num(3)?, None)?,
         ("g", "rename") => rename_soon(app, win, num(3)?),
         ("g", "color") => {
             let (g, c) = (num(3)?, p.get(4).copied().unwrap_or_default());
@@ -658,7 +712,7 @@ struct PageEvent { kind: String, #[serde(default)] username: String, #[serde(def
 
 #[tauri::command]
 async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
-    let (win, id) = parse_label(webview.label()).ok_or("not a tab")?;
+    let (win, id) = parse_label(&app, webview.label()).ok_or("not a tab")?;
     if is_incognito(&win) { return Ok(()); }
     let Some(origin) = webview.url().ok().and_then(|u| origin_of(u.as_str())) else { return Ok(()) };
     match ev.kind.as_str() {
@@ -872,14 +926,14 @@ pub fn run() {
             app.manage(Lib(Mutex::new(library)));
             app.set_menu(build_menu(&handle)?)?;
             app.on_menu_event(|app, e| on_menu(app, e.id().as_ref()));
-            create_window(&handle, MAIN)?;
+            create_window(&handle, MAIN, None)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             ui_ready, new_tab, new_incognito_window, close_tab, activate_tab, navigate, go_back, go_forward, reload,
             toggle_bookmark, find_in_page, suggest, history_search, history_clear, bookmarks_list, bookmark_remove,
             downloads_list, show_download,
-            tab_menu, group_menu, group_toggle, group_rename, move_tab,
+            tab_menu, group_menu, group_toggle, group_rename, move_tab, detach_tab,
             page_event, password_save, password_never, password_dismiss, password_menu,
             passwords_list, password_reveal, password_delete, passwords_import
         ])

@@ -40,8 +40,6 @@ pub struct TabList {
     pub active: Option<TabId>,
     pub groups: Vec<Group>,
     #[serde(skip)]
-    next_id: TabId,
-    #[serde(skip)]
     next_group: GroupId,
 }
 
@@ -73,27 +71,43 @@ pub fn rb_page(url: &str) -> Option<String> {
     (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| format!("pages/{name}.html"))
 }
 
+/// Tab ids are unique across all windows, so a tab keeps its id (and webview) when torn off into another window.
+static NEXT_TAB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 impl TabList {
     pub fn open(&mut self, url: &str, incognito: bool) -> TabId {
-        self.next_id += 1;
-        let id = self.next_id;
+        let id = NEXT_TAB.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.tabs.push(Tab { id, url: url.into(), incognito, last_active: now_secs(), ..Default::default() });
         id
     }
 
     /// Removes the tab and returns the (possibly new) active tab.
     pub fn close(&mut self, id: TabId) -> Option<TabId> {
-        let Some(i) = self.tabs.iter().position(|t| t.id == id) else { return self.active };
-        self.tabs.remove(i);
+        self.take(id);
+        self.active
+    }
+
+    /// Removes the tab and hands it back (to move it to another window); the right neighbour becomes active.
+    pub fn take(&mut self, id: TabId) -> Option<Tab> {
+        let i = self.tabs.iter().position(|t| t.id == id)?;
+        let t = self.tabs.remove(i);
         self.prune_groups();
         if self.active == Some(id) {
             self.active = self.tabs.get(i).or_else(|| i.checked_sub(1).and_then(|j| self.tabs.get(j))).map(|t| t.id);
         }
-        self.active
+        Some(t)
+    }
+
+    /// A tab arriving from another window; it lands at the end, outside any group.
+    pub fn adopt(&mut self, mut t: Tab) -> TabId {
+        t.group = None;
+        let id = t.id;
+        self.tabs.push(t);
+        id
     }
 
     pub fn activate(&mut self, id: TabId) {
@@ -277,6 +291,22 @@ mod tests {
         l.activate(c);
         assert!(l.visible(c), "activating a hidden tab expands its group");
         let _ = a;
+    }
+    #[test] fn tab_ids_unique_across_windows() {
+        let (mut a, mut b) = (TabList::default(), TabList::default());
+        assert_ne!(a.open("x", false), b.open("y", false), "a tab keeps its id when it moves to another window");
+    }
+    #[test] fn take_and_adopt_moves_a_tab() {
+        let (mut l, a, b, c) = three();
+        let g = l.new_group(b).unwrap();
+        l.activate(b);
+        let t = l.take(b).unwrap();
+        assert_eq!((ids(&l), l.active), (vec![a, c], Some(c)));
+        assert!(l.groups.iter().all(|x| x.id != g), "emptied group pruned");
+        let mut other = TabList::default();
+        assert_eq!(other.adopt(t), b);
+        assert_eq!(other.get(b).unwrap().group, None, "groups don't travel between windows");
+        assert!(l.take(b).is_none());
     }
     #[test] fn move_reorders() {
         let (mut l, a, b, c) = three();

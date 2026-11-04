@@ -3,7 +3,7 @@
   "identifier": "remote",
   "description": "Websites: exactly one command, page_event (login form seen / login submitted). Rust takes the tab and site from the webview, never the payload.",
   "webviews": [
-    "main-tab-*"
+    "tab-*"
   ],
   "local": false,
   "remote": {
