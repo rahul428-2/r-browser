@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-new-incognito-window"
+description = "Enables the new_incognito_window command without any pre-configured scope."
+commands.allow = ["new_incognito_window"]
+
+[[permission]]
+identifier = "deny-new-incognito-window"
+description = "Denies the new_incognito_window command without any pre-configured scope."
+commands.deny = ["new_incognito_window"]

@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 
 pub type TabId = u64;
+pub type GroupId = u64;
+
+/// Chrome's group colours; the UI maps names to shades.
+pub const COLORS: [&str; 8] = ["grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan"];
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Group {
+    pub id: GroupId,
+    pub name: String,
+    pub color: String,
+    pub collapsed: bool,
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Tab {
@@ -14,14 +26,21 @@ pub struct Tab {
     pub dirty_form: bool,
     pub last_active: u64,
     pub scroll_y: f64,
+    pub group: Option<GroupId>,
+    /// The page has a password field (drives the key icon in the address bar).
+    pub login_form: bool,
 }
 
+/// Invariant: the tabs of a group are always next to each other.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct TabList {
     pub tabs: Vec<Tab>,
     pub active: Option<TabId>,
+    pub groups: Vec<Group>,
     #[serde(skip)]
     next_id: TabId,
+    #[serde(skip)]
+    next_group: GroupId,
 }
 
 fn app_page(url: &str) -> Option<String> {
@@ -68,6 +87,7 @@ impl TabList {
     pub fn close(&mut self, id: TabId) -> Option<TabId> {
         let Some(i) = self.tabs.iter().position(|t| t.id == id) else { return self.active };
         self.tabs.remove(i);
+        self.prune_groups();
         if self.active == Some(id) {
             self.active = self.tabs.get(i).or_else(|| i.checked_sub(1).and_then(|j| self.tabs.get(j))).map(|t| t.id);
         }
@@ -77,8 +97,80 @@ impl TabList {
     pub fn activate(&mut self, id: TabId) {
         if let Some(t) = self.get_mut(id) {
             t.last_active = now_secs();
+            let g = t.group;
             self.active = Some(id);
+            if let Some(g) = g.and_then(|g| self.group_mut(g)) { g.collapsed = false; }
         }
+    }
+
+    // ---- groups ----
+
+    pub fn group_mut(&mut self, g: GroupId) -> Option<&mut Group> { self.groups.iter_mut().find(|x| x.id == g) }
+
+    /// Unused colour first, then cycle.
+    pub fn add_group(&mut self, name: &str, color: Option<&str>, collapsed: bool) -> GroupId {
+        self.next_group += 1;
+        let color = color.filter(|c| COLORS.contains(c)).map(String::from).unwrap_or_else(|| {
+            COLORS.iter().find(|c| !self.groups.iter().any(|g| g.color == **c)).unwrap_or(&COLORS[self.groups.len() % 8]).to_string()
+        });
+        self.groups.push(Group { id: self.next_group, name: name.into(), color, collapsed });
+        self.next_group
+    }
+
+    /// Index just after the group's last tab.
+    fn group_end(&self, g: GroupId) -> Option<usize> { self.tabs.iter().rposition(|t| t.group == Some(g)).map(|i| i + 1) }
+
+    /// Move a tab into group `to` (lands at its end) or out of its group (lands just right of it), so groups stay contiguous.
+    fn regroup(&mut self, id: TabId, to: Option<GroupId>) {
+        let Some(i) = self.tabs.iter().position(|t| t.id == id) else { return };
+        let mut t = self.tabs.remove(i);
+        let from = t.group.take();
+        let at = to.or(from).and_then(|g| self.group_end(g)).unwrap_or(i);
+        t.group = to;
+        self.tabs.insert(at, t);
+        self.prune_groups();
+    }
+
+    pub fn new_group(&mut self, id: TabId) -> Option<GroupId> {
+        self.get(id)?;
+        self.remove_from_group(id);
+        let g = self.add_group("", None, false);
+        self.get_mut(id).unwrap().group = Some(g);
+        Some(g)
+    }
+
+    pub fn add_to_group(&mut self, id: TabId, g: GroupId) {
+        if self.groups.iter().any(|x| x.id == g) && self.get(id).is_some_and(|t| t.group != Some(g)) { self.regroup(id, Some(g)); }
+    }
+
+    pub fn remove_from_group(&mut self, id: TabId) {
+        if self.get(id).is_some_and(|t| t.group.is_some()) { self.regroup(id, None); }
+    }
+
+    pub fn ungroup(&mut self, g: GroupId) {
+        self.tabs.iter_mut().filter(|t| t.group == Some(g)).for_each(|t| t.group = None);
+        self.prune_groups();
+    }
+
+    pub fn set_collapsed(&mut self, g: GroupId, collapsed: bool) {
+        if let Some(x) = self.group_mut(g) { x.collapsed = collapsed; }
+    }
+
+    pub fn prune_groups(&mut self) {
+        let tabs = &self.tabs;
+        self.groups.retain(|g| tabs.iter().any(|t| t.group == Some(g.id)));
+    }
+
+    /// Not hidden inside a collapsed group.
+    pub fn visible(&self, id: TabId) -> bool {
+        self.get(id).is_some_and(|t| t.group.is_none_or(|g| !self.groups.iter().any(|x| x.id == g && x.collapsed)))
+    }
+
+    /// The closest visible tab, preferring the right side (where Chrome goes).
+    pub fn nearest_visible(&self, id: TabId) -> Option<TabId> {
+        let i = self.tabs.iter().position(|t| t.id == id)?;
+        let right = self.tabs[i + 1..].iter().find(|t| self.visible(t.id));
+        right.or_else(|| self.tabs[..i].iter().rev().find(|t| self.visible(t.id))).map(|t| t.id)
     }
 
     pub fn move_tab(&mut self, id: TabId, to: usize) {
@@ -129,6 +221,48 @@ mod tests {
         assert_eq!(to_rb("https://evil.com/pages/history.html"), "https://evil.com/pages/history.html");
         assert_eq!(rb_page("rb://downloads"), Some("pages/downloads.html".into()));
         assert_eq!(rb_page("rb://../secret"), None);
+    }
+    fn ids(l: &TabList) -> Vec<TabId> { l.tabs.iter().map(|t| t.id).collect() }
+    #[test] fn group_tabs_stay_contiguous() {
+        let (mut l, a, b, c) = three();
+        let g = l.new_group(a).unwrap();
+        l.add_to_group(c, g);
+        assert_eq!(ids(&l), vec![a, c, b]);
+        assert_eq!(l.get(c).unwrap().group, Some(g));
+        assert_eq!(l.get(b).unwrap().group, None);
+    }
+    #[test] fn remove_from_group_moves_right_of_group() {
+        let (mut l, a, b, c) = three();
+        let g = l.new_group(a).unwrap();
+        l.add_to_group(b, g);
+        l.add_to_group(c, g);
+        l.remove_from_group(a);
+        assert_eq!(ids(&l), vec![b, c, a]);
+        assert_eq!(l.get(a).unwrap().group, None);
+    }
+    #[test] fn empty_groups_pruned() {
+        let (mut l, a, b, _) = three();
+        let g = l.new_group(a).unwrap();
+        l.new_group(b);
+        l.close(a);
+        assert!(l.groups.iter().all(|x| x.id != g));
+        assert_eq!(l.groups.len(), 1);
+        assert_ne!(l.groups[0].color, "", "new groups get a colour");
+    }
+    #[test] fn collapse_hides_and_activate_expands() {
+        let (mut l, a, b, c) = three();
+        let g = l.new_group(b).unwrap();
+        l.activate(b);
+        l.set_collapsed(g, true);
+        assert!(!l.visible(b));
+        assert_eq!(l.nearest_visible(b), Some(c));
+        l.ungroup(g);
+        let g = l.new_group(c).unwrap();
+        l.set_collapsed(g, true);
+        assert_eq!(l.nearest_visible(c), Some(b), "falls back to the left");
+        l.activate(c);
+        assert!(l.visible(c), "activating a hidden tab expands its group");
+        let _ = a;
     }
     #[test] fn move_tab_reorders() {
         let (mut l, a, b, c) = three();

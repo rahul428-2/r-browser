@@ -31,3 +31,8 @@ a.row:hover { background: var(--hull); }
 .ok { color: var(--signal); }
 .bad { color: var(--amber); }
 @media (max-width: 600px) { header { flex-wrap: wrap; } .search { width: 100%; } }
+.note { color: var(--fog); font-size: 12.5px; margin: -16px 12px 20px; }
+.note:empty { display: none; }
+.secret { font: 13px ui-monospace, Menlo, monospace; color: var(--fog); max-width: 220px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.row button.text { flex: none; }

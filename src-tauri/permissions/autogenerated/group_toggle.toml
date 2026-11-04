@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-group-toggle"
+description = "Enables the group_toggle command without any pre-configured scope."
+commands.allow = ["group_toggle"]
+
+[[permission]]
+identifier = "deny-group-toggle"
+description = "Denies the group_toggle command without any pre-configured scope."
+commands.deny = ["group_toggle"]

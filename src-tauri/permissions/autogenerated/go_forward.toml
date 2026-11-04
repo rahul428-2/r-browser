@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-go-forward"
+description = "Enables the go_forward command without any pre-configured scope."
+commands.allow = ["go_forward"]
+
+[[permission]]
+identifier = "deny-go-forward"
+description = "Denies the go_forward command without any pre-configured scope."
+commands.deny = ["go_forward"]

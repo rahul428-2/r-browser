@@ -316,6 +316,22 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 
 ---
 
+### Task 13 as built (4 Nov, ahead of Tasks 4–12, Rahul's request)
+
+- `core/vault.rs` (pure, tested): `Entry`, `Vault{entries}`, `origin_of`, `add/find/remove`, `seal/open` (`RBV1` | nonce | AES-256-GCM, AAD `RBV1`), `import_google_csv(&str)`, `shred(path)`.
+- `platform.rs`: `authenticate(reason)` (LocalAuthentication, Touch ID or password), `vault_key(create)` (keyring; creates the key only when no vault.bin exists, so a lost key never overwrites a vault).
+- App ACL manifest in `build.rs` lists every command; `capabilities/remote.json` grants remote `main-tab-*` pages only `allow-page-event`.
+- `inject/login.js` reports `login-form` and `login-submitted`; Rust takes tab + origin from the webview, never the payload.
+- Tests: `seal_open_roundtrip`, `wrong_key_fails`, `tampered_blob_fails`, `find_exact_origin_only`, `add_updates_same_user`, `import_google_csv_parses_sample`, `shred_removes_file`.
+
+### Task 13b: Tab groups (Chrome-style)
+
+- `core/tabs.rs`: `Group{id,name,color,collapsed}`, `Tab.group`; `new_group`, `add_to_group`, `remove_from_group`, `ungroup`, `set_collapsed`, `prune_groups`; groups stay contiguous. `session.rs` saves groups (serde default for old files).
+- Native popup menus for tab / group right-click; rename edits inline in the chip.
+- Tests: `group_tabs_stay_contiguous`, `remove_from_group_moves_right_of_group`, `empty_groups_pruned`, `activate_expands_group`, `session_roundtrips_groups`.
+
+---
+
 ### Task 14: Settings page, signed updater, CI release builds
 
 **Files:** Create `ui/pages/settings.html`, `.github/workflows/release.yml`, `.github/workflows/test.yml`; modify `tauri.conf.json`, `README.md`.

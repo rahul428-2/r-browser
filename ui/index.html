@@ -20,6 +20,7 @@
       <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
       <symbol id="i-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
       <symbol id="i-dn" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2 2M14 9l2 2"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
     </defs>
   </svg>
@@ -27,6 +28,9 @@
   <header id="strip" data-tauri-drag-region>
     <div id="tabs" role="tablist"></div>
     <button id="newtab" class="icon" aria-label="New tab"><svg><use href="#i-plus"/></svg></button>
+    <div id="savepw" role="alert" hidden><svg><use href="#i-key"/></svg><span></span>
+      <button id="pwsave">Save</button><button id="pwnever">Never</button>
+      <button id="pwx" class="icon" aria-label="Not now"><svg><use href="#i-x"/></svg></button></div>
     <button id="toast" hidden><svg><use href="#i-down"/></svg><span></span></button>
     <span id="private" title="Incognito: no history, cookies or site data are kept after you close this window"><svg><use href="#i-mask"/></svg>Incognito</span>
   </header>
@@ -40,6 +44,7 @@
       <span id="pretty" aria-hidden="true"></span>
       <input id="url" list="sugg" spellcheck="false" autocomplete="off" placeholder="Search Google or type a web address">
       <datalist id="sugg"></datalist>
+      <button id="key" class="icon" hidden aria-label="Fill a saved password" title="Fill a saved password"><svg><use href="#i-key"/></svg></button>
       <button id="star" class="icon" aria-label="Bookmark this page" title="Bookmark this page (Ctrl/⌘+D)"><svg><use href="#i-star"/></svg></button>
     </label>
     <form id="find" hidden>

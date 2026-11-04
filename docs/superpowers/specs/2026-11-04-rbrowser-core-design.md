@@ -100,6 +100,18 @@ Action (assistant's call): **close that tab** and show an R-Browser warning page
 - Detect login forms → offer save; autofill on matching origin only (exact origin, never subdomain-guess).
 - **Import from Google**: user exports CSV from passwords.google.com → R-Browser imports → offers to securely delete the CSV.
 - Bitwarden sync: later, not in v1.
+- **Unlock (Rahul, 4 Nov):** Touch ID or the laptop password (macOS `LAPolicyDeviceOwnerAuthentication`) before any fill, reveal, save, import or delete. One unlock lasts **5 minutes**.
+- Saving: on login submit a pill in the tab strip asks "Save password for site?" → Save / Never / ×. Never silent. Incognito never offers. The "never for this site" list is plaintext in library.json (like Chrome); passwords never are.
+- Filling: key icon in the address bar on pages with a password field (shown whether or not logins exist, so no plaintext list of your sites is needed) → Touch ID → native menu of usernames → fill. The fill script re-checks `location.origin` in the page, so a navigation between check and fill can't leak to another site.
+- rb://passwords: search, reveal, copy, delete, Import from Google. Plaintext is decrypted per operation and zeroized, never cached.
+- Not now (assistant's call): password generator, sync, Windows Hello / Linux unlock (they compile but are untested; non-mac falls back to keychain-only).
+
+### 5.9b Tab groups (Rahul, 4 Nov: "like Chrome")
+- Right-click a tab → Add to new group / Add to group → / Remove from group / Close. Group = optional name + one of 8 colours (grey, blue, red, yellow, green, pink, purple, cyan).
+- Group label chip in the strip; its tabs follow it, underlined in its colour; tabs of a group are always contiguous.
+- Click chip → collapse / expand. Right-click chip → Rename / colour / Ungroup / Close group. Collapsing the active tab's group activates the next visible tab (or opens a new one).
+- Groups are saved with the session; incognito groups are not.
+- Not now (assistant's call): drag between groups, saving a group, sync. Freezing collapsed tabs waits for Task 8 (needs the dirty-form guard).
 
 ### 5.10 Extra hardening (assistant's suggestions, accepted)
 - **HTTPS-only:** upgrade `http://` navigations; if HTTPS fails, show interstitial with "continue on insecure connection".

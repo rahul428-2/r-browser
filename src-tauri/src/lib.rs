@@ -1,16 +1,19 @@
 pub mod core;
+mod platform;
 
 use crate::core::library::{unique_path, Download, Library, Suggestion, Visit, Bookmark};
 use crate::core::omnibox::resolve;
 use crate::core::session::{self, Session};
 use crate::core::store;
-use crate::core::tabs::{now_secs, rb_page, to_rb, TabId, TabList};
-use serde::Serialize;
+use crate::core::tabs::{now_secs, rb_page, to_rb, GroupId, TabId, TabList, COLORS};
+use crate::core::vault::{self, origin_of, Entry, Vault};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
-use tauri::menu::{Menu, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, SubmenuBuilder};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri::webview::{DownloadEvent, PageLoadEvent, WebviewBuilder};
 use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl, Window, WindowEvent};
@@ -32,6 +35,20 @@ struct Runtime {
     /// Last fully loaded URL per tab webview: a download starts like a navigation, so we roll back to this.
     committed: Mutex<HashMap<String, String>>,
 }
+
+/// Password vault runtime state. Plaintext only exists inside `with_vault`.
+#[derive(Default)]
+struct VaultRt {
+    /// One vault operation at a time (read-modify-write of vault.bin).
+    lock: Mutex<()>,
+    unlocked_until: AtomicU64,
+    /// Login waiting for the user's Save / Never answer, per window.
+    pending: Mutex<HashMap<String, Entry>>,
+    /// Hashes (random per run) of logins we just filled, so submitting them doesn't ask to save again.
+    filled: Mutex<std::collections::HashSet<u64>>,
+    hasher: std::collections::hash_map::RandomState,
+}
+const UNLOCK_SECS: u64 = 5 * 60;
 
 type Res = Result<(), String>;
 
@@ -139,17 +156,7 @@ fn save_library_soon(app: &AppHandle) {
 /// Reopen last session's tabs; all start frozen (no webview) except the active one.
 fn restore(app: &AppHandle) -> Res {
     let Some(saved) = data_file(app, "session.json").and_then(|p| session::load::<Session>(&p)) else { return Ok(()) };
-    let ids: Vec<TabId> = with(app, MAIN, |l| {
-        saved.tabs.iter().map(|t| {
-            let id = l.open(&t.url, false);
-            let tab = l.get_mut(id).unwrap();
-            tab.title = t.title.clone();
-            tab.pinned = t.pinned;
-            tab.scroll_y = t.scroll_y;
-            tab.frozen = true;
-            id
-        }).collect()
-    });
+    let ids: Vec<TabId> = with(app, MAIN, |l| saved.restore_into(l));
     match ids.get(saved.active).or(ids.first()) {
         Some(&id) => activate(app, MAIN, id),
         None => Ok(()),
@@ -236,13 +243,18 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
     let w = app.get_window(win).ok_or(tauri::Error::WindowNotFound)?;
     let (width, h) = content_area(&w);
     let (a1, a2, a3) = (app.clone(), app.clone(), app.clone());
-    let builder = WebviewBuilder::new(label(win, id), target(url))
+    let mut builder = WebviewBuilder::new(label(win, id), target(url))
         // Incognito: non-persistent data store — nothing written to disk.
         .incognito(is_incognito(win))
         .on_page_load(move |wv, p| {
             let Some((win, id)) = parse_label(wv.label()) else { return };
             let url = to_rb(p.url().as_str());
-            let title = with(&a1, &win, |l| l.get_mut(id).map(|t| { t.url = url.clone(); t.title.clone() })).unwrap_or_default();
+            let started = p.event() == PageLoadEvent::Started;
+            let title = with(&a1, &win, |l| l.get_mut(id).map(|t| {
+                t.url = url.clone();
+                if started { t.login_form = false; }
+                t.title.clone()
+            })).unwrap_or_default();
             if p.event() == PageLoadEvent::Finished {
                 a1.state::<Runtime>().committed.lock().unwrap().insert(wv.label().to_string(), url.clone());
             }
@@ -259,6 +271,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             emit(&a2, &win);
         })
         .on_download(move |wv, ev| on_download(&a3, &wv, ev));
+    if !is_incognito(win) { builder = builder.initialization_script(include_str!("inject/login.js")); }
     w.add_child(builder, LogicalPosition::new(0.0, BAR), LogicalSize::new(width, h))
 }
 
@@ -484,6 +497,281 @@ fn show_download(webview: Webview, app: AppHandle, path: String) -> Res { truste
     r.map(|_| ()).map_err(err)
 }
 
+
+// ---- tab groups ----
+
+fn group_label(l: &TabList, g: GroupId) -> String {
+    l.groups.iter().find(|x| x.id == g).map(|x| {
+        let n = l.tabs.iter().filter(|t| t.group == Some(g)).count();
+        if x.name.is_empty() { format!("{} group · {n} tab{}", cap(&x.color), if n == 1 { "" } else { "s" }) } else { x.name.clone() }
+    }).unwrap_or_default()
+}
+fn cap(s: &str) -> String { let mut c = s.chars(); c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default() }
+
+/// After collapsing, the active tab may be hidden: move to the nearest visible tab, or a new one.
+fn ensure_visible_active(app: &AppHandle, win: &str) -> Res {
+    let (active, next) = with(app, win, |l| match l.active {
+        Some(a) if !l.visible(a) => (Some(a), l.nearest_visible(a)),
+        _ => (None, None),
+    });
+    match (active, next) {
+        (Some(_), Some(n)) => activate(app, win, n),
+        (Some(_), None) => open_tab(app, win, ""),
+        _ => { emit(app, win); Ok(()) }
+    }
+}
+
+fn close_group(app: &AppHandle, win: &str, g: GroupId) -> Res {
+    let ids: Vec<TabId> = with(app, win, |l| l.tabs.iter().filter(|t| t.group == Some(g)).map(|t| t.id).collect());
+    for id in ids { close(app, win, id)?; }
+    Ok(())
+}
+
+#[tauri::command]
+async fn tab_menu(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?;
+    let win = window.label().to_string();
+    let (cur, groups) = with(&app, &win, |l| (l.get(id).map(|t| t.group), l.groups.iter().map(|g| (g.id, group_label(l, g.id))).collect::<Vec<_>>()));
+    let Some(cur) = cur else { return Ok(()) };
+    let item = |act: &str, text: &str| MenuItemBuilder::with_id(format!("t|{win}|{act}|{id}"), text).build(&app);
+    let mut m = tauri::menu::MenuBuilder::new(&app).item(&item("new", "Add Tab to New Group").map_err(err)?);
+    let others: Vec<_> = groups.into_iter().filter(|(g, _)| Some(*g) != cur).collect();
+    if !others.is_empty() {
+        let mut sub = SubmenuBuilder::new(&app, "Add Tab to Group");
+        for (g, name) in others { sub = sub.item(&MenuItemBuilder::with_id(format!("t|{win}|add|{id}|{g}"), name).build(&app).map_err(err)?); }
+        m = m.item(&sub.build().map_err(err)?);
+    }
+    if cur.is_some() { m = m.item(&item("remove", "Remove from Group").map_err(err)?); }
+    let menu = m.separator().item(&item("close", "Close Tab").map_err(err)?).build().map_err(err)?;
+    window.popup_menu(&menu).map_err(err)
+}
+
+#[tauri::command]
+async fn group_menu(webview: Webview, app: AppHandle, window: Window, gid: GroupId) -> Res { trusted(&webview)?;
+    let win = window.label().to_string();
+    let Some(color) = with(&app, &win, |l| l.groups.iter().find(|g| g.id == gid).map(|g| g.color.clone())) else { return Ok(()) };
+    let item = |act: &str, text: &str| MenuItemBuilder::with_id(format!("g|{win}|{act}|{gid}"), text).build(&app);
+    let mut colors = SubmenuBuilder::new(&app, "Colour");
+    for c in COLORS {
+        colors = colors.item(&CheckMenuItemBuilder::with_id(format!("g|{win}|color|{gid}|{c}"), cap(c)).checked(c == color).build(&app).map_err(err)?);
+    }
+    let menu = tauri::menu::MenuBuilder::new(&app)
+        .item(&item("rename", "Rename Group…").map_err(err)?)
+        .item(&colors.build().map_err(err)?)
+        .separator()
+        .item(&item("ungroup", "Ungroup").map_err(err)?)
+        .item(&item("close", "Close Group").map_err(err)?)
+        .build().map_err(err)?;
+    window.popup_menu(&menu).map_err(err)
+}
+
+#[tauri::command]
+async fn group_toggle(webview: Webview, app: AppHandle, window: Window, gid: GroupId) -> Res { trusted(&webview)?;
+    let win = window.label();
+    with(&app, win, |l| { let c = l.groups.iter().any(|g| g.id == gid && g.collapsed); l.set_collapsed(gid, !c); });
+    ensure_visible_active(&app, win)
+}
+
+#[tauri::command]
+async fn group_rename(webview: Webview, app: AppHandle, window: Window, gid: GroupId, name: String) -> Res { trusted(&webview)?;
+    let win = window.label();
+    let name: String = name.trim().chars().filter(|c| !c.is_control()).take(40).collect();
+    with(&app, win, |l| if let Some(g) = l.group_mut(gid) { g.name = name; });
+    emit(&app, win);
+    Ok(())
+}
+
+/// macOS gives focus back to the page as the popup menu closes, so open the name box a moment later.
+fn rename_soon(app: &AppHandle, win: &str, g: GroupId) {
+    let (app, win) = (app.clone(), win.to_string());
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        focus_ui(&app, &win, &format!("startRename({g})"));
+    });
+}
+
+/// Ids of our native popup menus: `t|win|action|tab[|group]`, `g|win|action|group[|colour]`, `pw|win|tab|username`.
+fn on_popup(app: &AppHandle, id: &str) -> Res {
+    let p: Vec<&str> = id.splitn(5, '|').collect();
+    let (kind, win) = (p[0], p.get(1).copied().unwrap_or_default());
+    let num = |i: usize| p.get(i).and_then(|x| x.parse::<u64>().ok()).ok_or("bad menu id");
+    match (kind, p.get(2).copied().unwrap_or_default()) {
+        ("pw", _) => return fill_password(app, win, num(2)?, id.splitn(4, '|').nth(3).unwrap_or_default()),
+        ("t", "new") => {
+            let g = with(app, win, |l| l.new_group(num(3).unwrap_or(0)));
+            emit(app, win);
+            if let Some(g) = g { rename_soon(app, win, g); }
+        }
+        ("t", "add") => { let (t, g) = (num(3)?, num(4)?); with(app, win, |l| l.add_to_group(t, g)); emit(app, win); }
+        ("t", "remove") => { let t = num(3)?; with(app, win, |l| l.remove_from_group(t)); emit(app, win); }
+        ("t", "close") => close(app, win, num(3)?)?,
+        ("g", "rename") => rename_soon(app, win, num(3)?),
+        ("g", "color") => {
+            let (g, c) = (num(3)?, p.get(4).copied().unwrap_or_default());
+            if COLORS.contains(&c) { with(app, win, |l| if let Some(x) = l.group_mut(g) { x.color = c.into(); }); }
+            emit(app, win);
+        }
+        ("g", "ungroup") => { let g = num(3)?; with(app, win, |l| l.ungroup(g)); emit(app, win); }
+        ("g", "close") => close_group(app, win, num(3)?)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+// ---- password vault ----
+
+/// Run `f` on the decrypted vault. Asks for Touch ID / the login password if the 5-minute unlock has expired.
+/// `f` returns (result, changed); a changed vault is re-sealed with a fresh nonce and written atomically.
+fn with_vault<R>(app: &AppHandle, reason: &str, f: impl FnOnce(&mut Vault) -> (R, bool)) -> Result<R, String> {
+    let rt = app.state::<VaultRt>();
+    let _one = rt.lock.lock().unwrap();
+    if now_secs() >= rt.unlocked_until.load(Ordering::SeqCst) {
+        if !platform::authenticate(reason) { return Err("locked".into()); }
+        rt.unlocked_until.store(now_secs() + UNLOCK_SECS, Ordering::SeqCst);
+    }
+    let path = data_file(app, "vault.bin").ok_or("no app data folder")?;
+    let blob = std::fs::read(&path).ok();
+    let key = platform::vault_key(blob.is_none())?;
+    let mut v = match &blob { Some(b) => Vault::open(b, &key)?, None => Vault::default() };
+    let (r, changed) = f(&mut v);
+    if changed { store::write_atomic(&path, &v.seal(&key)).map_err(err)?; }
+    Ok(r)
+}
+
+fn login_hash(app: &AppHandle, origin: &str, user: &str, pass: &str) -> u64 {
+    use std::hash::BuildHasher;
+    app.state::<VaultRt>().hasher.hash_one((origin, user, pass))
+}
+
+/// The only command a website can call. Which tab and which site come from the webview, never from `ev`.
+#[derive(Deserialize)]
+struct PageEvent { kind: String, #[serde(default)] username: String, #[serde(default)] password: String }
+
+#[tauri::command]
+async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
+    let (win, id) = parse_label(webview.label()).ok_or("not a tab")?;
+    if is_incognito(&win) { return Ok(()); }
+    let Some(origin) = webview.url().ok().and_then(|u| origin_of(u.as_str())) else { return Ok(()) };
+    match ev.kind.as_str() {
+        "login-form" => {
+            with(&app, &win, |l| if let Some(t) = l.get_mut(id) { t.login_form = true; });
+            emit(&app, &win);
+        }
+        "login-submitted" if !ev.password.is_empty() && ev.password.len() < 1024 && ev.username.len() < 1024 => {
+            if lib(&app, |l| l.never_save.contains(&origin)) { return Ok(()); }
+            if app.state::<VaultRt>().filled.lock().unwrap().contains(&login_hash(&app, &origin, &ev.username, &ev.password)) { return Ok(()); }
+            let host = url::Url::parse(&origin).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_default();
+            let user = ev.username.clone();
+            app.state::<VaultRt>().pending.lock().unwrap().insert(win.clone(), Entry { origin, username: ev.username, password: ev.password, note: String::new() });
+            let _ = app.emit_to(ui_label(&win), "save-password", (win, host, user));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn take_pending(app: &AppHandle, win: &str) -> Option<Entry> { app.state::<VaultRt>().pending.lock().unwrap().remove(win) }
+
+#[tauri::command]
+async fn password_save(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
+    let Some(e) = take_pending(&app, window.label()) else { return Ok(()) };
+    with_vault(&app, "save a password", |v| { v.add(e); ((), true) })
+}
+
+#[tauri::command]
+async fn password_never(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
+    let Some(e) = take_pending(&app, window.label()) else { return Ok(()) };
+    lib(&app, |l| if !l.never_save.contains(&e.origin) { l.never_save.push(e.origin.clone()); });
+    save_library_soon(&app);
+    Ok(())
+}
+
+#[tauri::command]
+async fn password_dismiss(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?; take_pending(&app, window.label()); Ok(()) }
+
+/// Key icon: unlock, then a native menu of saved usernames for this exact origin.
+#[tauri::command]
+async fn password_menu(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
+    let win = window.label().to_string();
+    let id = with(&app, &win, |l| l.active).ok_or("no tab")?;
+    let origin = tab_webview(&app, &win, id)?.url().ok().and_then(|u| origin_of(u.as_str())).ok_or("not a website")?;
+    let users = with_vault(&app, "fill a saved password", |v| (v.find(&origin).iter().map(|e| e.username.clone()).collect::<Vec<_>>(), false))?;
+    let mut m = tauri::menu::MenuBuilder::new(&app);
+    if users.is_empty() {
+        m = m.item(&MenuItemBuilder::new("No saved passwords for this site").enabled(false).build(&app).map_err(err)?);
+    }
+    for u in users {
+        let text = if u.is_empty() { "(no username)".to_string() } else { u.clone() };
+        m = m.item(&MenuItemBuilder::with_id(format!("pw|{win}|{id}|{u}"), text).build(&app).map_err(err)?);
+    }
+    window.popup_menu(&m.build().map_err(err)?).map_err(err)
+}
+
+fn fill_password(app: &AppHandle, win: &str, id: TabId, username: &str) -> Res {
+    let wv = tab_webview(app, win, id)?;
+    let origin = wv.url().ok().and_then(|u| origin_of(u.as_str())).ok_or("not a website")?;
+    let Some(e) = with_vault(app, "fill a saved password", |v| (v.find(&origin).into_iter().find(|e| e.username == username).cloned(), false))? else { return Ok(()) };
+    app.state::<VaultRt>().filled.lock().unwrap().insert(login_hash(app, &e.origin, &e.username, &e.password));
+    let args = serde_json::to_string(&(&e.origin, &e.username, &e.password)).map_err(err)?;
+    // The page re-checks its own origin, so a navigation between our check and this script can't leak the password.
+    let js = format!(r#"(([o, u, p]) => {{
+  if (location.origin !== o) return;
+  const vis = (e) => !!(e.offsetWidth || e.offsetHeight || e.getClientRects().length);
+  const set = (el, v) => {{ Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, v);
+    el.dispatchEvent(new Event("input", {{ bubbles: true }})); el.dispatchEvent(new Event("change", {{ bubbles: true }})); }};
+  const all = [...document.querySelectorAll("input")];
+  const pw = all.find((e) => e.type === "password" && vis(e)) || all.find((e) => e.type === "password");
+  const user = (pw ? all.slice(0, all.indexOf(pw)).reverse() : all).find((e) => vis(e) && /^(text|email|tel)$/.test(e.type));
+  if (user && u) set(user, u);
+  if (pw) set(pw, p);
+  (pw || user)?.focus();
+}})({args})"#);
+    wv.eval(&js).map_err(err)?;
+    let _ = wv.set_focus();
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct Login { origin: String, username: String, note: String }
+
+#[tauri::command]
+async fn passwords_list(webview: Webview, app: AppHandle) -> Result<Vec<Login>, String> { trusted(&webview)?;
+    with_vault(&app, "see your saved passwords", |v| {
+        let mut out: Vec<Login> = v.entries.iter().map(|e| Login { origin: e.origin.clone(), username: e.username.clone(), note: e.note.clone() }).collect();
+        out.sort_by(|a, b| (&a.origin, &a.username).cmp(&(&b.origin, &b.username)));
+        (out, false)
+    })
+}
+
+#[tauri::command]
+async fn password_reveal(webview: Webview, app: AppHandle, origin: String, username: String) -> Result<String, String> { trusted(&webview)?;
+    with_vault(&app, "show a saved password", |v| (v.find(&origin).into_iter().find(|e| e.username == username).map(|e| e.password.clone()).unwrap_or_default(), false))
+}
+
+#[tauri::command]
+async fn password_delete(webview: Webview, app: AppHandle, origin: String, username: String) -> Res { trusted(&webview)?;
+    with_vault(&app, "delete a saved password", |v| { v.remove(&origin, &username); ((), true) })
+}
+
+/// Pick a Google Passwords CSV, import it, then offer to wipe the CSV (it holds every password in plain text).
+#[tauri::command]
+async fn passwords_import(webview: Webview, app: AppHandle) -> Result<usize, String> { trusted(&webview)?;
+    let Some(file) = app.dialog().file().set_title("Choose your Google Passwords CSV").add_filter("CSV", &["csv"]).blocking_pick_file() else { return Ok(0) };
+    let path = file.into_path().map_err(err)?;
+    let mut text = std::fs::read_to_string(&path).map_err(err)?;
+    let parsed = vault::import_google_csv(&text);
+    zeroize::Zeroize::zeroize(&mut text);
+    let entries = parsed?;
+    let n = entries.len();
+    with_vault(&app, "import passwords", |v| { for e in entries { v.add(e); } ((), true) })?;
+    let wipe = app.dialog()
+        .message(format!("Imported {n} passwords.\n\nThe CSV file still holds every password in plain text. Delete it now?\n\n(It's overwritten before deleting, but SSDs and backups like Time Machine can still keep old copies.)"))
+        .title("Delete the CSV file?")
+        .buttons(MessageDialogButtons::OkCancelCustom("Delete CSV".into(), "Keep".into()))
+        .blocking_show();
+    if wipe { vault::shred(&path).map_err(err)?; }
+    Ok(n)
+}
+
 // ---- native menu: shortcuts that work even when a web page has focus ----
 
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
@@ -512,6 +800,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("bookmarks", "Bookmarks", "CmdOrCtrl+Shift+B")?)
         .item(&item("history", "History", "CmdOrCtrl+Y")?)
         .item(&item("downloads", "Downloads", "CmdOrCtrl+Shift+J")?)
+        .item(&item("passwords", "Passwords", "CmdOrCtrl+Alt+P")?)
         .build()?;
     let menu = Menu::default(app)?;
     menu.append(&tab_menu)?;
@@ -522,6 +811,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 fn on_menu(app: &AppHandle, id: &str) {
     let (app, id) = (app.clone(), id.to_string());
     tauri::async_runtime::spawn(async move {
+        if id.contains('|') {
+            if let Err(e) = on_popup(&app, &id) { eprintln!("menu: {e}"); }
+            return;
+        }
         let win = focused(&app);
         let cur = with(&app, &win, |l| l.active);
         let r = match (id.as_str(), cur) {
@@ -542,9 +835,9 @@ fn on_menu(app: &AppHandle, id: &str) {
             ("zoom-out", Some(c)) => zoom(&app, &win, c, -1),
             ("zoom-reset", Some(c)) => zoom(&app, &win, c, 0),
             ("bookmark", _) => toggle_bookmark_active(&app, &win),
-            ("bookmarks" | "history" | "downloads", _) => open_tab(&app, &win, &format!("rb://{id}")),
+            ("bookmarks" | "history" | "downloads" | "passwords", _) => open_tab(&app, &win, &format!("rb://{id}")),
             ("next-tab" | "prev-tab", Some(c)) => {
-                let ids = tab_ids(&app, &win);
+                let ids: Vec<TabId> = with(&app, &win, |l| l.tabs.iter().filter(|t| t.id == c || l.visible(t.id)).map(|t| t.id).collect());
                 let i = ids.iter().position(|&x| x == c).unwrap_or(0);
                 let n = ids.len();
                 let j = if id == "next-tab" { (i + 1) % n } else { (i + n - 1) % n };
@@ -560,6 +853,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
         .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default() })
+        .manage(VaultRt::default())
+        .plugin(tauri_plugin_dialog::init())
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
         .setup(|app| {
             let handle = app.handle().clone();
@@ -573,7 +868,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ui_ready, new_tab, new_incognito_window, close_tab, activate_tab, navigate, go_back, go_forward, reload,
             toggle_bookmark, find_in_page, suggest, history_search, history_clear, bookmarks_list, bookmark_remove,
-            downloads_list, show_download
+            downloads_list, show_download,
+            tab_menu, group_menu, group_toggle, group_rename,
+            page_event, password_save, password_never, password_dismiss, password_menu,
+            passwords_list, password_reveal, password_delete, passwords_import
         ])
         .run(tauri::generate_context!())
         .expect("error while running R-Browser");

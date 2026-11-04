@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-toggle-bookmark"
+description = "Enables the toggle_bookmark command without any pre-configured scope."
+commands.allow = ["toggle_bookmark"]
+
+[[permission]]
+identifier = "deny-toggle-bookmark"
+description = "Denies the toggle_bookmark command without any pre-configured scope."
+commands.deny = ["toggle_bookmark"]

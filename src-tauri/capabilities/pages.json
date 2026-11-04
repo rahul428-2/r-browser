@@ -1,0 +1,41 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pages",
+  "description": "The app's own rb:// pages (history, bookmarks, passwords...) when loaded in a tab. Local origin only; every command still checks trusted().",
+  "webviews": [
+    "main-tab-*",
+    "incognito-*-tab-*"
+  ],
+  "permissions": [
+    "allow-ui-ready",
+    "allow-new-tab",
+    "allow-new-incognito-window",
+    "allow-close-tab",
+    "allow-activate-tab",
+    "allow-navigate",
+    "allow-go-back",
+    "allow-go-forward",
+    "allow-reload",
+    "allow-toggle-bookmark",
+    "allow-find-in-page",
+    "allow-suggest",
+    "allow-history-search",
+    "allow-history-clear",
+    "allow-bookmarks-list",
+    "allow-bookmark-remove",
+    "allow-downloads-list",
+    "allow-show-download",
+    "allow-tab-menu",
+    "allow-group-menu",
+    "allow-group-toggle",
+    "allow-group-rename",
+    "allow-password-save",
+    "allow-password-never",
+    "allow-password-dismiss",
+    "allow-password-menu",
+    "allow-passwords-list",
+    "allow-password-reveal",
+    "allow-password-delete",
+    "allow-passwords-import"
+  ]
+}

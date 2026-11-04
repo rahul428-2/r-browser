@@ -39,25 +39,89 @@ function favicon(t) {
   return box;
 }
 
+// Chrome's 8 group colours, tuned for the night palette.
+const GROUP_COLORS = { grey: "#9aa5b8", blue: "#5aa9ff", red: "#ff6b6b", yellow: "#f5c84a", green: "#4fd18b", pink: "#ff79c6", purple: "#b18cff", cyan: "#4fe0e8" };
+let renaming = null; // { gid, value, fresh } while a group name is being edited
+let rerendering = false; // removing the old input during a re-render must not count as "done editing"
+
+window.startRename = (gid) => {
+  const g = (state.groups || []).find((x) => x.id === gid);
+  renaming = { gid, value: g ? g.name : "", fresh: true };
+  renderTabs();
+};
+
+function groupChip(g, count) {
+  const color = GROUP_COLORS[g.color] || GROUP_COLORS.grey;
+  if (renaming && renaming.gid === g.id) {
+    const inp = document.createElement("input");
+    inp.className = "gname";
+    inp.style.setProperty("--g", color);
+    inp.value = renaming.value;
+    inp.maxLength = 40;
+    inp.placeholder = "Name this group";
+    inp.setAttribute("aria-label", "Group name");
+    let done = false;
+    const finish = (save) => {
+      if (done) return; done = true;
+      const name = inp.value; renaming = null;
+      if (save) invoke("group_rename", { gid: g.id, name }); else renderTabs();
+    };
+    inp.oninput = () => { renaming.value = inp.value; };
+    inp.onkeydown = (e) => { if (e.key === "Enter") finish(true); if (e.key === "Escape") finish(false); };
+    inp.onblur = () => { if (!rerendering) finish(true); };
+    const fresh = renaming.fresh; renaming.fresh = false;
+    const caret = inp.value.length;
+    requestAnimationFrame(() => { inp.focus(); if (fresh) inp.select(); else inp.setSelectionRange(caret, caret); });
+    return inp;
+  }
+  const b = document.createElement("button");
+  b.className = "gchip" + (g.name ? "" : " dot") + (g.collapsed ? " collapsed" : "");
+  b.style.setProperty("--g", color);
+  b.textContent = g.name;
+  if (g.collapsed) { const n = document.createElement("span"); n.className = "gcount"; n.textContent = count; b.append(n); }
+  b.title = `${g.name || "Unnamed group"} · ${count} tab${count === 1 ? "" : "s"} — click to ${g.collapsed ? "expand" : "collapse"}, right-click for options`;
+  b.setAttribute("aria-expanded", String(!g.collapsed));
+  b.onclick = () => invoke("group_toggle", { gid: g.id });
+  b.oncontextmenu = (e) => { e.preventDefault(); invoke("group_menu", { gid: g.id }); };
+  return b;
+}
+
 function renderTabs() {
-  $("tabs").replaceChildren(...state.tabs.map((t) => {
-    const el = document.createElement("div");
-    el.className = "tab" + (t.id === state.active ? " active" : "") + (t.frozen ? " frozen" : "");
-    el.setAttribute("role", "tab");
-    el.title = t.title || shown(t.url) || "New tab";
-    const title = document.createElement("span");
-    title.className = "title";
-    title.textContent = t.title || shown(t.url) || "New tab";
-    const x = document.createElement("button");
-    x.className = "icon x";
-    x.setAttribute("aria-label", "Close tab");
-    x.append(icon("i-x"));
-    x.onclick = (e) => { e.stopPropagation(); invoke("close_tab", { id: t.id }); };
-    el.onmousedown = (e) => { if (e.button === 1) invoke("close_tab", { id: t.id }); };
-    el.onclick = () => invoke("activate_tab", { id: t.id });
-    el.append(favicon(t), title, x);
-    return el;
-  }));
+  const groups = Object.fromEntries((state.groups || []).map((g) => [g.id, g]));
+  const out = [];
+  let prev = null;
+  for (const t of state.tabs) {
+    const g = t.group != null ? groups[t.group] : null;
+    if (g && t.group !== prev) out.push(groupChip(g, state.tabs.filter((x) => x.group === g.id).length));
+    prev = t.group;
+    if (g && g.collapsed) continue;
+    const el = tabEl(t);
+    if (g) { el.classList.add("grouped"); el.style.setProperty("--g", GROUP_COLORS[g.color] || GROUP_COLORS.grey); }
+    out.push(el);
+  }
+  rerendering = true;
+  $("tabs").replaceChildren(...out);
+  rerendering = false;
+}
+
+function tabEl(t) {
+  const el = document.createElement("div");
+  el.className = "tab" + (t.id === state.active ? " active" : "") + (t.frozen ? " frozen" : "");
+  el.setAttribute("role", "tab");
+  el.title = t.title || shown(t.url) || "New tab";
+  const title = document.createElement("span");
+  title.className = "title";
+  title.textContent = t.title || shown(t.url) || "New tab";
+  const x = document.createElement("button");
+  x.className = "icon x";
+  x.setAttribute("aria-label", "Close tab");
+  x.append(icon("i-x"));
+  x.onclick = (e) => { e.stopPropagation(); invoke("close_tab", { id: t.id }); };
+  el.onmousedown = (e) => { if (e.button === 1) invoke("close_tab", { id: t.id }); };
+  el.onclick = () => invoke("activate_tab", { id: t.id });
+  el.oncontextmenu = (e) => { e.preventDefault(); invoke("tab_menu", { id: t.id }); };
+  el.append(favicon(t), title, x);
+  return el;
 }
 
 function renderBar() {
@@ -79,6 +143,7 @@ function renderBar() {
     b.textContent = u.host.replace(/^www\./, "");
     pretty.append(b, rest);
   }
+  $("key").hidden = incognito || !(cur && cur.login_form);
   $("star").classList.toggle("on", !!state.bookmarked);
   $("star").title = state.bookmarked ? "Remove bookmark (Ctrl/⌘+D)" : "Bookmark this page (Ctrl/⌘+D)";
   if (document.activeElement !== $("url")) {
@@ -111,6 +176,22 @@ url.addEventListener("keydown", (e) => {
 
 // ---- bookmark star ----
 $("star").onclick = (e) => { e.preventDefault(); invoke("toggle_bookmark"); };
+
+// ---- passwords: fill (key icon) and save prompt ----
+$("key").onclick = (e) => { e.preventDefault(); invoke("password_menu").catch(() => {}); };
+let pwTimer;
+const hidePw = () => { $("savepw").hidden = true; clearTimeout(pwTimer); };
+me.listen("save-password", (e) => {
+  const [win, host, user] = e.payload;
+  if (win !== myWindow) return;
+  $("savepw").querySelector("span").textContent = user ? `Save password for ${user} on ${host}?` : `Save password for ${host}?`;
+  $("savepw").hidden = false;
+  clearTimeout(pwTimer);
+  pwTimer = setTimeout(() => { hidePw(); invoke("password_dismiss"); }, 60000);
+});
+$("pwsave").onclick = () => { hidePw(); invoke("password_save").catch(() => {}); };
+$("pwnever").onclick = () => { hidePw(); invoke("password_never"); };
+$("pwx").onclick = () => { hidePw(); invoke("password_dismiss"); };
 
 // ---- suggestions from bookmarks + history (native datalist popup) ----
 let sugTimer;

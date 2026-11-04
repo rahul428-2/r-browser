@@ -22,6 +22,9 @@ pub struct Library {
     pub bookmarks: Vec<Bookmark>,
     pub history: Vec<Visit>,
     pub downloads: Vec<Download>,
+    /// Origins where the user said "never save passwords" (no passwords here, those live in vault.bin).
+    #[serde(default)]
+    pub never_save: Vec<String>,
 }
 
 fn matches(q: &str, url: &str, title: &str) -> bool {
