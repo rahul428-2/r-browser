@@ -98,7 +98,7 @@ body.mac #strip { padding-left: 80px; }
 #omni[data-state="secure"] #chip { color: var(--signal); background: #3b9eff1a; }
 #omni[data-state="insecure"] #chip { color: var(--amber); background: #f5b54a1f; }
 
-#url, #pretty { flex: 1; min-width: 0; font: 15px/1 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+#url, #pretty { flex: 1; min-width: 0; font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
   letter-spacing: .1px; }
 #url { background: none; border: 0; outline: 0; color: var(--ice); user-select: text; caret-color: var(--glint); }
 #url::placeholder { color: #5b6880; }
