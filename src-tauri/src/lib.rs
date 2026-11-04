@@ -10,7 +10,7 @@ use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl, Window, WindowEvent};
 
-const BAR: f64 = 76.0; // tab strip 36 + toolbar 40
+const BAR: f64 = 80.0; // tab strip 36 + toolbar 43 + guard line 1
 const NEWTAB: &str = "pages/newtab.html";
 
 struct Browser(Mutex<TabList>);

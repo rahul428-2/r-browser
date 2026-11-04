@@ -6,20 +6,36 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="strip" data-tauri-drag-region>
-    <div id="tabs"></div>
-    <button id="newtab" title="New tab (Ctrl/⌘+T)">+</button>
-  </div>
-  <div id="bar">
-    <button id="back" title="Back">‹</button>
-    <button id="fwd" title="Forward">›</button>
-    <button id="reload" title="Reload">↻</button>
-    <div id="omni">
-      <span id="trust" title=""></span>
-      <input id="url" spellcheck="false" autocomplete="off" placeholder="Search Google or type a URL">
-    </div>
-    <button id="menu" title="Menu">≡</button>
-  </div>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+      <symbol id="i-fwd" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+      <symbol id="i-reload" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+      <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17.5v.01"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+    </defs>
+  </svg>
+
+  <header id="strip" data-tauri-drag-region>
+    <div id="tabs" role="tablist"></div>
+    <button id="newtab" class="icon" aria-label="New tab"><svg><use href="#i-plus"/></svg></button>
+  </header>
+
+  <nav id="bar">
+    <button id="back" class="icon" aria-label="Back"><svg><use href="#i-back"/></svg></button>
+    <button id="fwd" class="icon" aria-label="Forward"><svg><use href="#i-fwd"/></svg></button>
+    <button id="reload" class="icon" aria-label="Reload"><svg><use href="#i-reload"/></svg></button>
+    <label id="omni" data-state="none">
+      <span id="chip" title=""><svg><use href="#i-search"/></svg></span>
+      <span id="pretty" aria-hidden="true"></span>
+      <input id="url" spellcheck="false" autocomplete="off" placeholder="Search Google or type a web address">
+    </label>
+  </nav>
+  <div id="guard" aria-hidden="true"></div>
+
   <script src="app.js"></script>
 </body>
 </html>

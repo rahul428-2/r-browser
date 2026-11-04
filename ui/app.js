@@ -2,67 +2,101 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
 if (navigator.userAgent.includes("Mac")) document.body.classList.add("mac");
+
 let state = { tabs: [], active: null };
+const isNewtab = (url) => !url || url.endsWith("/pages/newtab.html");
+const shown = (url) => (isNewtab(url) ? "" : url);
+const parse = (url) => { try { return new URL(url); } catch { return null; } };
 
-const shown = (url) => (url.endsWith("/pages/newtab.html") ? "" : url);
+function icon(id) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const u = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  u.setAttribute("href", "#" + id);
+  s.append(u);
+  return s;
+}
 
-function render() {
-  const box = $("tabs");
-  box.replaceChildren(...state.tabs.map((t) => {
+function favicon(t) {
+  const box = document.createElement("span");
+  box.className = "fav";
+  const u = parse(t.url);
+  if (isNewtab(t.url) || !u || !/^https?:$/.test(u.protocol)) {
+    const img = new Image();
+    img.src = "logo.png";
+    box.append(img);
+    return box;
+  }
+  const mono = () => { box.className = "fav mono"; box.textContent = (u.hostname.replace(/^www\./, "")[0] || "?").toUpperCase(); };
+  if (t.frozen) { mono(); return box; } // frozen tabs make no network requests
+  const img = new Image();
+  img.onerror = () => { img.remove(); mono(); };
+  img.src = u.origin + "/favicon.ico";
+  box.append(img);
+  return box;
+}
+
+function renderTabs() {
+  $("tabs").replaceChildren(...state.tabs.map((t) => {
     const el = document.createElement("div");
     el.className = "tab" + (t.id === state.active ? " active" : "") + (t.frozen ? " frozen" : "");
-    el.title = t.title || t.url;
+    el.setAttribute("role", "tab");
+    el.title = t.title || shown(t.url) || "New tab";
     const title = document.createElement("span");
     title.className = "title";
-    title.textContent = t.title || shown(t.url) || "New Tab";
+    title.textContent = t.title || shown(t.url) || "New tab";
     const x = document.createElement("button");
-    x.className = "x";
-    x.textContent = "×";
+    x.className = "icon x";
+    x.setAttribute("aria-label", "Close tab");
+    x.append(icon("i-x"));
     x.onclick = (e) => { e.stopPropagation(); invoke("close_tab", { id: t.id }); };
     el.onmousedown = (e) => { if (e.button === 1) invoke("close_tab", { id: t.id }); };
     el.onclick = () => invoke("activate_tab", { id: t.id });
-    el.append(title, x);
+    el.append(favicon(t), title, x);
     return el;
   }));
-  const cur = state.tabs.find((t) => t.id === state.active);
-  if (cur && document.activeElement !== $("url")) $("url").value = shown(cur.url);
 }
 
-listen("tabs-changed", (e) => { state = e.payload; render(); });
+function renderBar() {
+  const cur = state.tabs.find((t) => t.id === state.active);
+  const url = cur ? shown(cur.url) : "";
+  const u = parse(url);
+  const st = !u ? "none" : u.protocol === "https:" ? "secure" : u.protocol === "http:" ? "insecure" : "none";
+  $("omni").dataset.state = st;
+  document.body.dataset.state = st;
+  $("chip").replaceChildren(icon(st === "secure" ? "i-shield" : st === "insecure" ? "i-warn" : "i-search"));
+  $("chip").title = st === "secure" ? "Encrypted connection" : st === "insecure" ? "Not secure: this connection isn't encrypted" : "";
+
+  const pretty = $("pretty");
+  pretty.replaceChildren();
+  if (u) {
+    const rest = url.slice(url.indexOf(u.host) + u.host.length).replace(/^\/$/, "");
+    const b = document.createElement("b");
+    b.textContent = u.host.replace(/^www\./, "");
+    pretty.append(b, rest);
+  }
+  if (document.activeElement !== $("url")) {
+    $("url").value = url;
+    $("omni").classList.toggle("resting", !!u);
+  }
+}
+
+listen("tabs-changed", (e) => { state = e.payload; renderTabs(); renderBar(); });
 
 const act = (cmd) => state.active != null && invoke(cmd, { id: state.active });
 $("newtab").onclick = () => invoke("new_tab", {}).then(() => $("url").focus());
 $("back").onclick = () => act("go_back");
 $("fwd").onclick = () => act("go_forward");
 $("reload").onclick = () => act("reload");
-$("url").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && state.active != null) {
-    invoke("navigate", { id: state.active, input: $("url").value });
-    $("url").blur();
-  }
-  if (e.key === "Escape") { $("url").blur(); render(); }
-});
-$("url").addEventListener("focus", () => $("url").select());
 
-// Shortcuts while the browser bar has focus. Shortcuts inside pages come from the native menu.
-document.addEventListener("keydown", (e) => {
-  const mod = e.metaKey || e.ctrlKey;
-  if (!mod) return;
-  const i = state.tabs.findIndex((t) => t.id === state.active);
-  const k = e.key.toLowerCase();
-  if (k === "t") { e.preventDefault(); $("newtab").click(); }
-  else if (k === "w") { e.preventDefault(); act("close_tab"); }
-  else if (k === "l") { e.preventDefault(); $("url").focus(); }
-  else if (k === "r") { e.preventDefault(); act("reload"); }
-  else if (/^[1-9]$/.test(k) && state.tabs.length) {
-    e.preventDefault();
-    const t = k === "9" ? state.tabs[state.tabs.length - 1] : state.tabs[+k - 1];
-    if (t) invoke("activate_tab", { id: t.id });
-  } else if (k === "tab" && state.tabs.length) {
-    e.preventDefault();
-    const n = state.tabs.length;
-    invoke("activate_tab", { id: state.tabs[(i + (e.shiftKey ? n - 1 : 1)) % n].id });
+const url = $("url");
+url.addEventListener("focus", () => { $("omni").classList.remove("resting"); url.select(); });
+url.addEventListener("blur", renderBar);
+url.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && state.active != null && url.value.trim()) {
+    invoke("navigate", { id: state.active, input: url.value });
+    url.blur();
   }
+  if (e.key === "Escape") url.blur();
 });
 
 invoke("ui_ready");

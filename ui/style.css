@@ -1,36 +1,96 @@
 :root {
-  --bg: #05070d;
-  --panel: #0c111c;
-  --tab: #111827;
-  --tab-active: #16213a;
-  --text: #e6ecf5;
-  --muted: #8a96ab;
-  --accent: #2f8cff;
-  --glow: #3fd0ff;
+  --abyss: #070b14;   /* tab strip, behind everything */
+  --hull: #111a2b;    /* toolbar + active tab: one connected surface */
+  --hull-hi: #1a263c; /* hover */
+  --well: #0a101c;    /* inside the address field */
+  --ice: #dce6f5;     /* primary text */
+  --fog: #7d8ba3;     /* secondary text, idle icons */
+  --signal: #3b9eff;  /* the logo's ring: safe / focus */
+  --glint: #7fe3ff;   /* the wolf's eye: glow */
+  --amber: #f5b54a;   /* warnings only */
+  --strip-h: 36px;
+  --bar-h: 43px;
 }
+
 * { box-sizing: border-box; margin: 0; }
-html, body { height: 76px; overflow: hidden; background: var(--bg); color: var(--text);
-  font: 13px -apple-system, "Segoe UI", Ubuntu, sans-serif; user-select: none; }
-button { background: none; border: 0; color: var(--text); font-size: 18px; width: 32px; height: 30px;
-  border-radius: 6px; cursor: pointer; }
-button:hover { background: var(--tab); }
+html, body {
+  height: 80px; overflow: hidden; background: var(--abyss); color: var(--ice);
+  font: 12.5px/1.2 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+  -webkit-font-smoothing: antialiased; user-select: none; cursor: default;
+}
 
-#strip { height: 36px; display: flex; align-items: flex-end; padding: 0 8px; gap: 2px; }
-#tabs { display: flex; gap: 2px; overflow: hidden; min-width: 0; }
-.tab { display: flex; align-items: center; gap: 6px; width: 200px; min-width: 60px; height: 30px; padding: 0 6px 0 10px;
-  background: var(--tab); border-radius: 8px 8px 0 0; color: var(--muted); cursor: default; flex-shrink: 1; }
-.tab.active { background: var(--tab-active); color: var(--text); box-shadow: inset 0 2px 0 var(--accent); }
-.tab.frozen { opacity: .55; }
-.tab .title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.tab .x { width: 20px; height: 20px; font-size: 14px; color: var(--muted); }
-#newtab { height: 28px; margin-bottom: 1px; }
+svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round; flex: none; }
+button.icon { display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
+  border: 0; border-radius: 8px; background: none; color: var(--fog); }
+button.icon:hover { background: var(--hull-hi); color: var(--ice); }
+button.icon:active { transform: scale(.94); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 
-#bar { height: 40px; display: flex; align-items: center; gap: 4px; padding: 0 8px; background: var(--tab-active); }
-#omni { flex: 1; display: flex; align-items: center; height: 30px; background: var(--bg); border-radius: 15px;
-  padding: 0 12px; border: 1px solid transparent; }
-#omni:focus-within { border-color: var(--accent); box-shadow: 0 0 6px var(--glow); }
-#trust { width: 18px; text-align: center; margin-right: 6px; cursor: pointer; }
-#url { flex: 1; background: none; border: 0; outline: 0; color: var(--text); font-size: 14px; user-select: text; }
+/* ---------- tab strip ---------- */
+#strip { height: var(--strip-h); display: flex; align-items: flex-end; padding: 0 8px; }
+body.mac #strip { padding-left: 80px; }
+#tabs { display: flex; min-width: 0; height: 30px; }
 
-/* macOS: room for the traffic-light buttons that sit on the tab strip */
-body.mac #strip { padding-left: 78px; }
+.tab { position: relative; display: flex; align-items: center; gap: 8px;
+  width: 220px; min-width: 44px; flex: 0 1 220px; height: 30px; padding: 0 6px 0 12px;
+  border-radius: 10px 10px 0 0; color: var(--fog); }
+.tab + .tab::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 1px; background: #1d2a40; }
+.tab.active::before, .tab.active + .tab::before { display: none; }
+.tab:hover:not(.active) { background: #0d1422; color: var(--ice); }
+.tab.active { background: var(--hull); color: var(--ice); }
+/* rounded "feet" so the active tab flows into the toolbar */
+.tab.active::after { content: ""; position: absolute; bottom: 0; left: -10px; right: -10px; height: 10px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 0 0, transparent 9.5px, var(--hull) 10px) left bottom / 10px 10px no-repeat,
+    radial-gradient(circle at 100% 0, transparent 9.5px, var(--hull) 10px) right bottom / 10px 10px no-repeat; }
+.tab.frozen .fav, .tab.frozen .title { opacity: .45; }
+
+.fav { width: 16px; height: 16px; border-radius: 4px; flex: none; display: grid; place-items: center;
+  font-size: 10px; font-weight: 700; color: var(--abyss); background: var(--fog); overflow: hidden; }
+.fav img { width: 16px; height: 16px; }
+.tab.active .fav.mono { background: var(--signal); }
+.title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
+  -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); }
+.tab .x { width: 20px; height: 20px; border-radius: 6px; opacity: 0; }
+.tab .x svg { width: 13px; height: 13px; }
+.tab:hover .x, .tab.active .x { opacity: 1; }
+.tab .x:hover { background: #24324c; }
+#newtab { margin: 0 0 1px 4px; width: 28px; height: 28px; }
+
+/* ---------- toolbar ---------- */
+#bar { height: var(--bar-h); display: flex; align-items: center; gap: 2px; padding: 0 10px 0 8px;
+  background: var(--hull); }
+#omni { flex: 1; position: relative; display: flex; align-items: center; gap: 8px; height: 31px;
+  margin-left: 6px; padding: 0 12px 0 5px; border-radius: 16px; background: var(--well);
+  border: 1px solid #1a2639; transition: border-color .15s, box-shadow .15s; cursor: text; }
+#omni:focus-within { border-color: var(--signal);
+  box-shadow: 0 0 0 3px #3b9eff26, 0 0 14px #7fe3ff1f; }
+
+#chip { display: grid; place-items: center; width: 24px; height: 22px; border-radius: 11px;
+  color: var(--fog); }
+#chip svg { width: 15px; height: 15px; }
+#omni[data-state="secure"] #chip { color: var(--signal); background: #3b9eff1a; }
+#omni[data-state="insecure"] #chip { color: var(--amber); background: #f5b54a1f; }
+
+#url, #pretty { flex: 1; min-width: 0; font: 14px/1 system-ui, -apple-system, "Segoe UI", Ubuntu, sans-serif;
+  letter-spacing: .1px; }
+#url { background: none; border: 0; outline: 0; color: var(--ice); user-select: text; caret-color: var(--glint); }
+#url::placeholder { color: #5b6880; }
+#url:focus-visible { outline: none; }
+/* resting display: domain bright, the rest dimmed, so lookalike domains stand out */
+#pretty { position: absolute; left: 42px; right: 12px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; color: var(--fog); pointer-events: none; }
+#pretty b { font-weight: 500; color: var(--ice); }
+#omni.resting #url { color: transparent; }
+#omni:not(.resting) #pretty { display: none; }
+
+/* ---------- the guard line: security state, full width ---------- */
+#guard { height: 1px; background: #1a2639; transition: background .3s, box-shadow .3s; }
+body[data-state="secure"] #guard { background: linear-gradient(90deg, transparent, var(--signal) 30%, var(--glint) 50%, var(--signal) 70%, transparent);
+  box-shadow: 0 0 6px #3b9eff80; }
+body[data-state="insecure"] #guard { background: var(--amber); box-shadow: 0 0 6px #f5b54a80; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
