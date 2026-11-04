@@ -176,7 +176,9 @@ fn create_window(app: &AppHandle, win: &str) -> tauri::Result<()> {
     let (app2, win2) = (app.clone(), win.to_string());
     w.on_window_event(move |e| match e {
         WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => layout(&app2, &win2),
-        WindowEvent::Destroyed => { app2.state::<Browser>().inner().0.lock().unwrap().remove(&win2); }
+        WindowEvent::Destroyed => {
+            app2.state::<Browser>().inner().0.lock().unwrap().remove(&win2);
+        }
         _ => {}
     });
     Ok(())
