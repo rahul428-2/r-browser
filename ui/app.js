@@ -2,11 +2,13 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
 if (navigator.userAgent.includes("Mac")) document.body.classList.add("mac");
+if (window.__TAURI__.window.getCurrentWindow().label.startsWith("incognito-")) document.body.classList.add("incognito");
 
 let state = { tabs: [], active: null };
-const isNewtab = (url) => !url || url.endsWith("/pages/newtab.html");
-const shown = (url) => (isNewtab(url) ? "" : url);
 const parse = (url) => { try { return new URL(url); } catch { return null; } };
+// Only our own page counts as "new tab" — a site serving /pages/newtab.html must not blank the address bar.
+const isNewtab = (url) => { if (!url) return true; const u = parse(url); return !!u && u.origin === location.origin && u.pathname === "/pages/newtab.html"; };
+const shown = (url) => (isNewtab(url) ? "" : url);
 
 function icon(id) {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -68,15 +70,16 @@ function renderBar() {
 
   const pretty = $("pretty");
   pretty.replaceChildren();
-  if (u) {
-    const rest = url.slice(url.indexOf(u.host) + u.host.length).replace(/^\/$/, "");
+  // Built from parsed parts (never string slicing), and never shows user:pass@ — so the bold part is the real host.
+  if (u && /^https?:$/.test(u.protocol) && u.host) {
+    const rest = (u.pathname === "/" ? "" : u.pathname) + u.search + u.hash;
     const b = document.createElement("b");
     b.textContent = u.host.replace(/^www\./, "");
     pretty.append(b, rest);
   }
   if (document.activeElement !== $("url")) {
     $("url").value = url;
-    $("omni").classList.toggle("resting", !!u);
+    $("omni").classList.toggle("resting", pretty.childNodes.length > 0);
   }
 }
 

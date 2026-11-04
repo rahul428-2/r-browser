@@ -24,8 +24,14 @@ pub struct TabList {
     next_id: TabId,
 }
 
-/// The built-in new-tab page (served from the app, any origin).
-pub fn is_newtab(url: &str) -> bool { url.is_empty() || url.ends_with("/pages/newtab.html") }
+/// The built-in new-tab page. Only counts when served by the app itself (tauri://localhost,
+/// http://tauri.localhost, or the local dev server) — a website serving /pages/newtab.html does not.
+pub fn is_newtab(url: &str) -> bool {
+    if url.is_empty() { return true; }
+    let Ok(u) = url::Url::parse(url) else { return false };
+    let app_origin = u.scheme() == "tauri" || matches!(u.host_str(), Some("tauri.localhost" | "localhost" | "127.0.0.1"));
+    app_origin && u.path() == "/pages/newtab.html"
+}
 
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -91,6 +97,12 @@ mod tests {
         let a = l.open("a", false);
         l.activate(a);
         assert_eq!(l.close(a), None);
+    }
+    #[test] fn newtab_only_from_app_origin() {
+        assert!(is_newtab(""));
+        assert!(is_newtab("tauri://localhost/pages/newtab.html"));
+        assert!(is_newtab("http://127.0.0.1:1430/pages/newtab.html"));
+        assert!(!is_newtab("https://evil.com/pages/newtab.html"));
     }
     #[test] fn move_tab_reorders() {
         let (mut l, a, b, c) = three();

@@ -93,4 +93,14 @@ body[data-state="secure"] #guard { background: linear-gradient(90deg, transparen
   box-shadow: 0 0 6px #3b9eff80; }
 body[data-state="insecure"] #guard { background: var(--amber); box-shadow: 0 0 6px #f5b54a80; }
 
+/* ---------- incognito: same layout, violet night instead of blue ---------- */
+#private { display: none; }
+body.incognito { --abyss: #0a0714; --hull: #1a1430; --hull-hi: #261d45; --well: #0d0a1a; --signal: #a98bff; --glint: #d4c6ff; }
+body.incognito #strip { background: var(--abyss); }
+body.incognito #private { display: flex; align-items: center; gap: 6px; margin: 0 0 7px auto; padding: 0 10px 0 8px;
+  height: 22px; border-radius: 11px; background: #a98bff1f; color: #cbb9ff; font-weight: 500; }
+body.incognito #private svg { width: 15px; height: 15px; }
+body.incognito .tab + .tab::before { background: #2a2147; }
+body.incognito .tab:hover:not(.active) { background: #130e24; }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
