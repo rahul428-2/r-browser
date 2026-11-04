@@ -13,6 +13,7 @@ pub struct Tab {
     pub audible: bool,
     pub dirty_form: bool,
     pub last_active: u64,
+    pub scroll_y: f64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -22,6 +23,9 @@ pub struct TabList {
     #[serde(skip)]
     next_id: TabId,
 }
+
+/// The built-in new-tab page (served from the app, any origin).
+pub fn is_newtab(url: &str) -> bool { url.is_empty() || url.ends_with("/pages/newtab.html") }
 
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)

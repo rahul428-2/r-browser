@@ -1,7 +1,9 @@
 pub mod core;
 
 use crate::core::omnibox::resolve;
+use crate::core::session::{self, Session};
 use crate::core::tabs::{TabId, TabList};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItemBuilder, SubmenuBuilder};
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
@@ -46,6 +48,53 @@ fn layout(app: &AppHandle) {
 fn emit(app: &AppHandle) {
     let list = tabs(app).clone();
     let _ = app.emit_to("ui", "tabs-changed", list);
+    schedule_save(app);
+}
+
+static SAVE_GEN: AtomicU64 = AtomicU64::new(0);
+static RESTORED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn session_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let dir = app.path().app_data_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("session.json"))
+}
+
+/// Save ~1 s after the last change (debounced); never before the old session was restored.
+fn schedule_save(app: &AppHandle) {
+    if !RESTORED.load(Ordering::SeqCst) { return; }
+    let gen = SAVE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if SAVE_GEN.load(Ordering::SeqCst) != gen { return; }
+        let snap = Session::from_tabs(&tabs(&app));
+        if let Some(p) = session_path(&app) {
+            if let Err(e) = session::save_atomic(&p, &snap) { eprintln!("session save failed: {e}"); }
+        }
+    });
+}
+
+/// Reopen last session's tabs; all start frozen (no webview) except the active one.
+fn restore(app: &AppHandle) -> Res {
+    let Some(saved) = session_path(app).and_then(|p| session::load(&p)) else { return Ok(()) };
+    let mut ids = vec![];
+    {
+        let mut l = tabs(app);
+        for t in &saved.tabs {
+            let id = l.open(&t.url, false);
+            let tab = l.get_mut(id).unwrap();
+            tab.title = t.title.clone();
+            tab.pinned = t.pinned;
+            tab.scroll_y = t.scroll_y;
+            tab.frozen = true;
+            ids.push(id);
+        }
+    }
+    match ids.get(saved.active).or(ids.first()) {
+        Some(&id) => activate(app, id),
+        None => Ok(()),
+    }
 }
 
 fn target(url: &str) -> WebviewUrl {
@@ -109,7 +158,13 @@ fn close(app: &AppHandle, id: TabId) -> Res {
     let next = tabs(app).close(id);
     match next {
         Some(n) => activate(app, n),
-        None => { app.exit(0); Ok(()) } // last tab closed -> quit, like Chrome
+        None => {
+            // Last tab closed -> quit, like Chrome. Save the empty session now so it isn't restored next time.
+            SAVE_GEN.fetch_add(1, Ordering::SeqCst);
+            if let Some(p) = session_path(app) { let _ = session::save_atomic(&p, &Session::default()); }
+            app.exit(0);
+            Ok(())
+        }
     }
 }
 
@@ -124,6 +179,10 @@ fn active(app: &AppHandle) -> Option<TabId> { tabs(app).active }
 #[tauri::command]
 async fn ui_ready(app: AppHandle) -> Res {
     let start: Vec<String> = std::mem::take(&mut *app.state::<StartUrls>().inner().0.lock().unwrap());
+    if !RESTORED.load(Ordering::SeqCst) {
+        restore(&app)?;
+        RESTORED.store(true, Ordering::SeqCst);
+    }
     for u in &start { open_tab(&app, &resolve(u))?; }
     if tabs(&app).tabs.is_empty() { open_tab(&app, "")?; }
     layout(&app);
