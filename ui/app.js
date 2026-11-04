@@ -87,44 +87,76 @@ function groupChip(g, count) {
   return b;
 }
 
+// The strip is updated in place: each tab keeps its element for its whole life. Rebuilding on every page
+// event made the hovered tab lose its hover (the ✕ flickered), dropped clicks that landed mid-rebuild and
+// re-fetched favicons.
+const tabEls = new Map();  // tab id -> { el, title, favKey }
+const chipEls = new Map(); // group id -> { el, sig }
+
 function renderTabs() {
   const groups = Object.fromEntries((state.groups || []).map((g) => [g.id, g]));
   const out = [];
   let prev = null;
   for (const t of state.tabs) {
     const g = t.group != null ? groups[t.group] : null;
-    if (g && t.group !== prev) out.push(groupChip(g, state.tabs.filter((x) => x.group === g.id).length));
+    if (g && t.group !== prev) out.push(chipFor(g, state.tabs.filter((x) => x.group === g.id).length));
     prev = t.group;
     if (g && g.collapsed) continue;
-    const el = tabEl(t);
-    if (g) { el.classList.add("grouped"); el.style.setProperty("--g", GROUP_COLORS[g.color] || GROUP_COLORS.grey); }
-    out.push(el);
+    out.push(tabFor(t, g));
   }
+  const live = new Set(state.tabs.map((t) => t.id));
+  for (const id of tabEls.keys()) if (!live.has(id)) tabEls.delete(id);
+  for (const id of chipEls.keys()) if (!groups[id]) chipEls.delete(id);
+  const cur = [...$("tabs").children];
+  if (cur.length === out.length && cur.every((n, i) => n === out[i])) return; // same order: nothing to move
   rerendering = true;
   $("tabs").replaceChildren(...out);
   rerendering = false;
 }
 
-function tabEl(t) {
+function chipFor(g, count) {
+  if (renaming && renaming.gid === g.id) { chipEls.delete(g.id); return groupChip(g, count); }
+  const sig = [g.name, g.color, g.collapsed, count].join("|");
+  const c = chipEls.get(g.id);
+  if (c && c.sig === sig) { c.el.style.transform = ""; return c.el; } // may still be slid aside from a drag
+  const el = groupChip(g, count);
+  chipEls.set(g.id, { el, sig });
+  return el;
+}
+
+function tabFor(t, g) {
+  let c = tabEls.get(t.id);
+  if (!c) { c = makeTab(t.id); tabEls.set(t.id, c); }
+  const { el } = c;
+  el.className = "tab" + (t.id === state.active ? " active" : "") + (t.frozen ? " frozen" : "") + (g ? " grouped" : "");
+  el.style.transform = el.style.transition = "";
+  if (g) el.style.setProperty("--g", GROUP_COLORS[g.color] || GROUP_COLORS.grey);
+  const text = t.title || shown(t.url) || "New tab";
+  if (el.title !== text) { el.title = text; c.title.textContent = text; }
+  const u = parse(t.url);
+  const favKey = isNewtab(t.url) || !u || !/^https?:$/.test(u.protocol) ? "logo" : (t.frozen || incognito ? "mono:" : "img:") + u.origin;
+  if (c.favKey !== favKey) { c.favKey = favKey; el.firstChild.replaceWith(favicon(t)); }
+  return el;
+}
+
+function makeTab(id) {
+  const tab = () => state.tabs.find((x) => x.id === id);
   const el = document.createElement("div");
-  el.className = "tab" + (t.id === state.active ? " active" : "") + (t.frozen ? " frozen" : "");
   el.setAttribute("role", "tab");
-  el.title = t.title || shown(t.url) || "New tab";
+  el.dataset.id = id;
   const title = document.createElement("span");
   title.className = "title";
-  title.textContent = t.title || shown(t.url) || "New tab";
   const x = document.createElement("button");
   x.className = "icon x";
   x.setAttribute("aria-label", "Close tab");
   x.append(icon("i-x"));
-  x.onclick = (e) => { e.stopPropagation(); invoke("close_tab", { id: t.id }); };
-  el.onmousedown = (e) => { if (e.button === 1) invoke("close_tab", { id: t.id }); };
-  el.dataset.id = t.id;
-  el.onclick = () => { if (!dragJustEnded) invoke("activate_tab", { id: t.id }); };
-  el.onpointerdown = (e) => startDrag(e, el, t);
-  el.oncontextmenu = (e) => { e.preventDefault(); invoke("tab_menu", { id: t.id }); };
-  el.append(favicon(t), title, x);
-  return el;
+  x.onclick = (e) => { e.stopPropagation(); invoke("close_tab", { id }); };
+  el.onmousedown = (e) => { if (e.button === 1) invoke("close_tab", { id }); };
+  el.onclick = () => { if (!dragJustEnded) invoke("activate_tab", { id }); };
+  el.onpointerdown = (e) => { const t = tab(); if (t) startDrag(e, el, t); };
+  el.oncontextmenu = (e) => { e.preventDefault(); invoke("tab_menu", { id }); };
+  el.append(document.createElement("span"), title, x); // first child = favicon slot
+  return { el, title, favKey: null };
 }
 
 function renderBar() {

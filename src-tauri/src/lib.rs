@@ -322,10 +322,10 @@ fn activate(app: &AppHandle, win: &str, id: TabId) -> Res {
     if was_frozen || app.get_webview(&label(win, id)).is_none() {
         create_webview(app, win, id, &url).map_err(err)?;
     }
-    for other in tab_ids(app, win) {
-        if let Some(wv) = app.get_webview(&label(win, other)) {
-            let _ = if other == id { wv.show() } else { wv.hide() };
-        }
+    // Show the new page before hiding the old one, so there's never a frame with no page (or the wrong one) on top.
+    if let Some(wv) = app.get_webview(&label(win, id)) { let _ = wv.show(); }
+    for other in tab_ids(app, win).into_iter().filter(|&o| o != id) {
+        if let Some(wv) = app.get_webview(&label(win, other)) { let _ = wv.hide(); }
     }
     emit(app, win);
     Ok(())
