@@ -1,0 +1,21 @@
+# 20 real sites, no login needed. Mix: news, shopping, social, docs, video. All in the top-10k list (run at full speed).
+https://www.bbc.com/news
+https://edition.cnn.com/
+https://www.theguardian.com/international
+https://timesofindia.indiatimes.com/
+https://www.amazon.in/
+https://www.flipkart.com/
+https://www.ebay.com/
+https://www.reddit.com/r/technology/
+https://www.linkedin.com/
+https://www.pinterest.com/ideas/
+https://en.wikipedia.org/wiki/Web_browser
+https://github.com/tauri-apps/tauri
+https://stackoverflow.com/questions
+https://developer.mozilla.org/en-US/docs/Web/JavaScript
+https://docs.python.org/3/library/
+https://www.youtube.com/
+https://www.twitch.tv/
+https://www.imdb.com/chart/top/
+https://www.espn.com/
+https://medium.com/
