@@ -37,6 +37,9 @@ pub struct Library {
     /// Sites that passed the one-time safety check (core::check): treated as verified, never checked again.
     #[serde(default)]
     pub checked: Vec<String>,
+    /// Freeze background tabs idle this long; None = 5, 0 = never (settings page: Task 14).
+    #[serde(default)]
+    pub freeze_after_minutes: Option<u64>,
 }
 
 /// The site a per-site setting is keyed on: the host of an http(s) URL.

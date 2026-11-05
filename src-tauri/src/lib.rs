@@ -65,6 +65,8 @@ struct Runtime {
     user_nav: Mutex<std::collections::HashSet<String>>,
     /// App-page addresses the browser itself is about to open (see `page_url`); anything else is refused.
     app_nav: Mutex<std::collections::HashSet<String>>,
+    /// Tabs just thawed: label -> where to scroll once the page has loaded again.
+    scroll_to: Mutex<HashMap<String, f64>>,
 }
 
 /// Password vault runtime state. Plaintext only exists inside `with_vault`.
@@ -337,9 +339,13 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
                 if started && f.get(wv.label()).is_some_and(|u| u != p.url().as_str()) { f.remove(wv.label()); }
                 f.contains_key(wv.label())
             };
+            let restoring = a1.state::<Runtime>().scroll_to.lock().unwrap().contains_key(wv.label());
             let title = with(&a1, &win, |l| l.get_mut(id).map(|t| {
                 if started {
                     t.login_form = false;
+                    t.dirty_form = false;
+                    t.audible = false;
+                    if !restoring { t.scroll_y = 0.0; }
                     // A different site: forget the old site's icon (same site keeps it, so tabs don't flicker).
                     if url::Url::parse(&t.url).ok().map(|u| u.origin()) != url::Url::parse(&url).ok().map(|u| u.origin()) { t.icon.clear(); }
                 }
@@ -350,6 +356,10 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             if p.event() == PageLoadEvent::Finished {
                 if let Some(h) = p.url().host_str() { a1.state::<Runtime>().upgraded.lock().unwrap().remove(h); }
                 a1.state::<Runtime>().committed.lock().unwrap().insert(wv.label().to_string(), url.clone());
+                if let Some(y) = a1.state::<Runtime>().scroll_to.lock().unwrap().remove(wv.label()) {
+                    // Lazy pages grow after load: retry briefly until the old position exists.
+                    let _ = wv.eval(format!("(y=>{{let n=0;const go=()=>{{scrollTo(0,y);if(scrollY<y-2&&++n<6)setTimeout(go,300)}};go()}})({y})"));
+                }
             }
             if p.event() == PageLoadEvent::Finished && !is_incognito(&win) && !failed {
                 lib(&a1, |l| l.record_visit(&url, &title, now_secs(), false));
@@ -379,10 +389,12 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
     { builder = builder.user_agent(user_agent()); }
     builder = builder.initialization_script(include_str!("inject/dark.js"))
         .initialization_script(include_str!("inject/popup.js"))
-        .initialization_script(include_str!("inject/icon.js"));
+        .initialization_script(include_str!("inject/icon.js"))
+        .initialization_script(include_str!("inject/state.js"));
     if !is_incognito(win) { builder = builder.initialization_script(include_str!("inject/login.js")); }
     let wv = w.add_child(builder, LogicalPosition::new(0.0, BAR), LogicalSize::new(width, h))?;
     sync_blocking(app, &wv, url);
+    if let Some(&z) = app.state::<Runtime>().zoom.lock().unwrap().get(wv.label()) { let _ = wv.set_zoom(z); } // thawed tab keeps its zoom
     #[cfg(target_os = "macos")]
     {
         let (a, l) = (app.clone(), wv.label().to_string());
@@ -656,10 +668,11 @@ fn open_tab(app: &AppHandle, win: &str, url: &str) -> Res {
 fn activate(app: &AppHandle, win: &str, id: TabId) -> Res {
     let found = with(app, win, |l| {
         l.activate(id);
-        l.get_mut(id).map(|t| (t.url.clone(), std::mem::replace(&mut t.frozen, false)))
+        l.get_mut(id).map(|t| (t.url.clone(), std::mem::replace(&mut t.frozen, false), t.scroll_y))
     });
-    let Some((url, was_frozen)) = found else { return Ok(()) };
+    let Some((url, was_frozen, y)) = found else { return Ok(()) };
     if was_frozen || app.get_webview(&label(win, id)).is_none() {
+        if y > 0.0 { app.state::<Runtime>().scroll_to.lock().unwrap().insert(label(win, id), y); }
         create_webview(app, win, id, &url).map_err(err)?;
     }
     // Show the new page before hiding the old one, so there's never a frame with no page (or the wrong one) on top.
@@ -669,6 +682,33 @@ fn activate(app: &AppHandle, win: &str, id: TabId) -> Res {
     }
     emit(app, win);
     Ok(())
+}
+
+/// Every 30 s, close the webviews of tabs idle longer than the setting (default 5 min). The tab stays in the
+/// strip (greyed) with its address and scroll position; clicking it loads the page again.
+/// ponytail: back/forward history and in-page state are lost on freeze (WebView2 TrySuspend keeps them → Task 14).
+fn start_freezer(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let idle = lib(&app, |l| l.freeze_after_minutes.unwrap_or(5)) * 60;
+        let wins: Vec<String> = app.state::<Browser>().0.lock().unwrap().keys().cloned().collect();
+        for win in wins {
+            // Decide, mark and close under one lock, so a click on the tab can't land in between.
+            let froze: Vec<String> = with(&app, &win, |l| {
+                let (active, now) = (l.active, now_secs());
+                l.tabs.iter_mut().filter(|t| core::tabs::should_freeze(t, active, now, idle)).map(|t| {
+                    if let Some(wv) = app.get_webview(&label(&win, t.id)) { let _ = wv.close(); }
+                    t.frozen = true;
+                    t.loading = false;
+                    label(&win, t.id)
+                }).collect()
+            });
+            if froze.is_empty() { continue; }
+            for l in &froze { app.state::<Runtime>().committed.lock().unwrap().remove(l); }
+            emit(&app, &win);
+        }
+    });
 }
 
 fn close(app: &AppHandle, win: &str, id: TabId) -> Res {
@@ -1145,7 +1185,8 @@ fn login_hash(app: &AppHandle, origin: &str, user: &str, pass: &str) -> u64 {
 
 /// The only command a website can call. Which tab and which site come from the webview, never from `ev`.
 #[derive(Deserialize)]
-struct PageEvent { kind: String, #[serde(default)] username: String, #[serde(default)] password: String, #[serde(default)] url: String }
+struct PageEvent { kind: String, #[serde(default)] username: String, #[serde(default)] password: String, #[serde(default)] url: String,
+    #[serde(default)] dirty: bool, #[serde(default)] on: bool, #[serde(default)] y: f64 }
 
 #[tauri::command]
 async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
@@ -1161,6 +1202,17 @@ async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
         app.state::<Runtime>().popups.lock().unwrap().insert(win.clone(), (page, ev.url));
         let _ = app.emit_to(ui_label(&win), "popup-blocked", (win, host));
         return Ok(());
+    }
+    // Freezing inputs (state.js). Not emitted: nothing on screen changes.
+    match ev.kind.as_str() {
+        "dirty-form" => { with(&app, &win, |l| if let Some(t) = l.get_mut(id) { t.dirty_form = ev.dirty; }); return Ok(()); }
+        "audible" => { with(&app, &win, |l| if let Some(t) = l.get_mut(id) { t.audible = ev.on; }); return Ok(()); }
+        "scroll" if ev.y.is_finite() => {
+            with(&app, &win, |l| if let Some(t) = l.get_mut(id) { t.scroll_y = ev.y.clamp(0.0, 1e7); });
+            if !is_incognito(&win) { save_session_soon(&app); }
+            return Ok(());
+        }
+        _ => {}
     }
     if is_incognito(&win) { return Ok(()); } // incognito tabs show no site icons (no fetches that outlive the window)
     if ev.kind == "icon" {
@@ -1376,7 +1428,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
-        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default(), app_nav: Mutex::default(), user_nav: Mutex::default() })
+        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default(), app_nav: Mutex::default(), user_nav: Mutex::default(), scroll_to: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
@@ -1395,6 +1447,7 @@ pub fn run() {
             app.on_menu_event(|app, e| on_menu(app, e.id().as_ref()));
             create_window(&handle, MAIN, None)?;
             start_blocker(&handle);
+            start_freezer(&handle);
             let h = handle.clone();
             platform::on_load_failed(move |e, url, domain, code, desc| on_load_failed(&h, e, url, domain, code, desc));
             let h = handle.clone();
