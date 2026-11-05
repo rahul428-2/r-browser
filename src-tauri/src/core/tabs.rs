@@ -31,6 +31,9 @@ pub struct Tab {
     pub login_form: bool,
     /// Between page-load Started and Finished (drives the loading bar).
     pub loading: bool,
+    /// The icon the page declares (<link rel=icon>), if any; the toolbar falls back to /favicon.ico.
+    #[serde(default)]
+    pub icon: String,
 }
 
 /// Invariant: the tabs of a group are always next to each other.
@@ -73,6 +76,11 @@ pub fn safari_ua(info_plist: &str) -> String {
         .map(str::trim).filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.'))
         .unwrap_or("26.0");
     format!("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{v} Safari/605.1.15")
+}
+
+/// An icon address a page may hand the toolbar: http(s) only (no data:/file:/javascript:), and not huge.
+pub fn valid_icon(url: &str) -> bool {
+    url.len() < 2048 && url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
 }
 
 /// WKNavigationType values a website can't fake into an app page: going back/forward, or reloading one.
@@ -387,5 +395,14 @@ mod tests {
         let plist = "<key>CFBundleShortVersionString</key>\n\t<string>27.0.1</string>";
         assert_eq!(safari_ua(plist), "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15");
         assert!(safari_ua("garbage").contains("Version/26.0 Safari/605.1.15"));
+    }
+
+    #[test]
+    fn only_web_icons_accepted() {
+        assert!(valid_icon("https://www.gstatic.com/images/branding/product/2x/gmail_2020q4_32dp.png"));
+        for bad in ["javascript:alert(1)", "file:///etc/passwd", "data:image/svg+xml,<svg onload=alert(1)>", "rb://passwords", ""] {
+            assert!(!valid_icon(bad), "{bad}");
+        }
+        assert!(!valid_icon(&format!("https://a.com/{}", "x".repeat(3000))));
     }
 }

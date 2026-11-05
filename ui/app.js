@@ -20,21 +20,19 @@ function icon(id) {
   return s;
 }
 
+// Tab icon: the page's declared icon, else /favicon.ico, else a plain globe. The browser's own pages get the shield.
 function favicon(t) {
   const box = document.createElement("span");
   box.className = "fav";
   const u = parse(t.url);
-  if (isNewtab(t.url) || !u || !/^https?:$/.test(u.protocol)) {
-    const img = new Image();
-    img.src = "logo.png";
-    box.append(img);
-    return box;
-  }
-  const mono = () => { box.className = "fav mono"; box.textContent = (u.hostname.replace(/^www\./, "")[0] || "?").toUpperCase(); };
-  if (t.frozen || incognito) { mono(); return box; } // frozen tabs make no requests; incognito leaves no favicon traces
+  if (isNewtab(t.url) || !u || !/^https?:$/.test(u.protocol)) { box.classList.add("own"); box.append(icon("i-shield")); return box; }
+  const globe = () => { box.replaceChildren(icon("i-globe")); box.classList.add("none"); };
+  if (t.frozen || incognito) { globe(); return box; } // frozen tabs make no requests; incognito leaves no favicon traces
+  const tries = [t.icon, u.origin + "/favicon.ico"].filter(Boolean);
   const img = new Image();
-  img.onerror = () => { img.remove(); mono(); };
-  img.src = u.origin + "/favicon.ico";
+  img.decoding = "async";
+  img.onerror = () => { tries.shift(); if (tries.length) img.src = tries[0]; else globe(); };
+  img.src = tries[0];
   box.append(img);
   return box;
 }
@@ -134,7 +132,7 @@ function tabFor(t, g) {
   const text = t.title || shown(t.url) || "New tab";
   if (el.title !== text) { el.title = text; c.title.textContent = text; }
   const u = parse(t.url);
-  const favKey = isNewtab(t.url) || !u || !/^https?:$/.test(u.protocol) ? "logo" : (t.frozen || incognito ? "mono:" : "img:") + u.origin;
+  const favKey = isNewtab(t.url) || !u || !/^https?:$/.test(u.protocol) ? "logo" : (t.frozen || incognito ? "globe:" : "img:" + (t.icon || u.origin));
   if (c.favKey !== favKey) { c.favKey = favKey; el.firstChild.replaceWith(favicon(t)); }
   return el;
 }

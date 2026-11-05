@@ -322,8 +322,12 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
                 f.contains_key(wv.label())
             };
             let title = with(&a1, &win, |l| l.get_mut(id).map(|t| {
+                if started {
+                    t.login_form = false;
+                    // A different site: forget the old site's icon (same site keeps it, so tabs don't flicker).
+                    if url::Url::parse(&t.url).ok().map(|u| u.origin()) != url::Url::parse(&url).ok().map(|u| u.origin()) { t.icon.clear(); }
+                }
                 t.url = url.clone();
-                if started { t.login_form = false; }
                 t.loading = started;
                 t.title.clone()
             })).unwrap_or_default();
@@ -357,7 +361,8 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
     #[cfg(target_os = "macos")]
     { builder = builder.user_agent(user_agent()); }
     builder = builder.initialization_script(include_str!("inject/dark.js"))
-        .initialization_script(include_str!("inject/popup.js"));
+        .initialization_script(include_str!("inject/popup.js"))
+        .initialization_script(include_str!("inject/icon.js"));
     if !is_incognito(win) { builder = builder.initialization_script(include_str!("inject/login.js")); }
     let wv = w.add_child(builder, LogicalPosition::new(0.0, BAR), LogicalSize::new(width, h))?;
     sync_blocking(app, &wv, url);
@@ -1054,7 +1059,14 @@ async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
         let _ = app.emit_to(ui_label(&win), "popup-blocked", (win, host));
         return Ok(());
     }
-    if is_incognito(&win) { return Ok(()); }
+    if is_incognito(&win) { return Ok(()); } // incognito tabs show no site icons (no fetches that outlive the window)
+    if ev.kind == "icon" {
+        if core::tabs::valid_icon(&ev.url) {
+            with(&app, &win, |l| if let Some(t) = l.get_mut(id) { t.icon = ev.url; });
+            emit(&app, &win);
+        }
+        return Ok(());
+    }
     let Some(origin) = origin_of(&page) else { return Ok(()) };
     match ev.kind.as_str() {
         "login-form" => {

@@ -71,10 +71,12 @@ body.mac #strip { padding-left: 80px; }
   background-size: calc(100% - 8px) 2px; background-position: 4px 100%; background-repeat: no-repeat; }
 .tab.grouped.active { box-shadow: inset 0 2px 0 var(--g); }
 
-.fav { width: 16px; height: 16px; border-radius: 4px; flex: none; display: grid; place-items: center;
-  font-size: 10px; font-weight: 700; color: var(--abyss); background: var(--fog); overflow: hidden; }
-.fav img { width: 16px; height: 16px; }
-.tab.active .fav.mono { background: var(--signal); }
+.fav { width: 16px; height: 16px; flex: none; display: grid; place-items: center; overflow: hidden; }
+.fav img { width: 16px; height: 16px; object-fit: contain; border-radius: 3px; }
+.fav svg { width: 16px; height: 16px; }
+.fav.none { color: var(--fog); }
+.fav.own { color: var(--signal); }
+.tab.active .fav.none { color: var(--ice); }
 .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
   -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); }
 .tab .x { width: 20px; height: 20px; border-radius: 6px; opacity: 0; }
