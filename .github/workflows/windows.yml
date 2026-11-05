@@ -1,0 +1,41 @@
+# Builds the Windows installer (NSIS .exe) on GitHub's Windows runner and, if a release tag is given,
+# attaches it to that release. The updater signature is made on the maintainer's Mac afterwards, so the
+# signing key never leaves it.
+name: windows
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the installer to (e.g. v0.1.0); empty = artifact only"
+        required: false
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Build installer
+        run: |
+          echo '{"bundle":{"createUpdaterArtifacts":false}}' > ci.json
+          npx -y @tauri-apps/cli@2 build --bundles nsis --config ci.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r-browser-windows
+          path: src-tauri/target/release/bundle/nsis/*.exe
+      - name: Attach to release
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" target/release/bundle/nsis/*.exe --clobber
