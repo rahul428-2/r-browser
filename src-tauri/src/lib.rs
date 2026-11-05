@@ -1,7 +1,8 @@
 pub mod core;
 mod platform;
 
-use crate::core::library::{unique_path, Download, Library, Suggestion, Visit, Bookmark};
+use crate::core::blocker;
+use crate::core::library::{site, unique_path, Download, Library, Suggestion, Visit, Bookmark};
 use crate::core::omnibox::resolve;
 use crate::core::session::{self, Session};
 use crate::core::store;
@@ -38,6 +39,8 @@ struct Runtime {
     tear: Mutex<Option<(String, TabId, f64, f64)>>,
     /// Window whose strip currently shows a "drop here" mark for the torn tab.
     hint: Mutex<Option<String>>,
+    /// Pop-up waiting for the user's Allow, per window: (page that tried it, pop-up URL).
+    popups: Mutex<HashMap<String, (String, String)>>,
 }
 
 /// Password vault runtime state. Plaintext only exists inside `with_vault`.
@@ -272,7 +275,8 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
 fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Result<Webview> {
     let w = app.get_window(win).ok_or(tauri::Error::WindowNotFound)?;
     let (width, h) = content_area(&w);
-    let (a1, a2, a3) = (app.clone(), app.clone(), app.clone());
+    let (a1, a2, a3, a4) = (app.clone(), app.clone(), app.clone(), app.clone());
+    let me = label(win, id);
     let mut builder = WebviewBuilder::new(label(win, id), target(url))
         // Incognito: non-persistent data store — nothing written to disk.
         .incognito(is_incognito(win))
@@ -280,6 +284,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             let Some((win, id)) = parse_label(&a1, wv.label()) else { return };
             let url = to_rb(p.url().as_str());
             let started = p.event() == PageLoadEvent::Started;
+            if started { sync_blocking(&a1, &wv, p.url().as_str()); }
             let title = with(&a1, &win, |l| l.get_mut(id).map(|t| {
                 t.url = url.clone();
                 if started { t.login_form = false; }
@@ -301,10 +306,84 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             if !is_incognito(&win) { lib(&a2, |l| l.set_title(&url, &title)); }
             emit(&a2, &win);
         })
-        .on_download(move |wv, ev| on_download(&a3, &wv, ev));
-    builder = builder.initialization_script(include_str!("inject/dark.js"));
+        .on_download(move |wv, ev| on_download(&a3, &wv, ev))
+        // Clicked target=_blank links and window.open (WebKit already refuses ones without a click) open as tabs.
+        .on_new_window(move |url, _| {
+            let (app, me) = (a4.clone(), me.clone());
+            if matches!(url.scheme(), "http" | "https") {
+                tauri::async_runtime::spawn(async move {
+                    if let Some((win, _)) = parse_label(&app, &me) { let _ = open_tab(&app, &win, url.as_str()); }
+                });
+            }
+            tauri::webview::NewWindowResponse::Deny
+        });
+    builder = builder.initialization_script(include_str!("inject/dark.js"))
+        .initialization_script(include_str!("inject/popup.js"));
     if !is_incognito(win) { builder = builder.initialization_script(include_str!("inject/login.js")); }
-    w.add_child(builder, LogicalPosition::new(0.0, BAR), LogicalSize::new(width, h))
+    let wv = w.add_child(builder, LogicalPosition::new(0.0, BAR), LogicalSize::new(width, h))?;
+    sync_blocking(app, &wv, url);
+    Ok(wv)
+}
+
+// ---- ad / tracker blocking ----
+
+fn is_tab_label(l: &str) -> bool { l.starts_with("tab-") || l.starts_with("itab-") }
+
+/// Blocking is on for every tab except sites the user switched it off for.
+fn sync_blocking(app: &AppHandle, wv: &Webview, url: &str) {
+    platform::set_blocking(wv, lib(app, |l| l.blocking_on(url)));
+}
+
+/// Load (or, once per list version, compile) the bundled filter lists, then switch blocking on in every open tab.
+fn start_blocker(app: &AppHandle) {
+    use std::hash::{Hash, Hasher};
+    let lists = blocker::bundled();
+    let mut h = std::hash::DefaultHasher::new();
+    lists.hash(&mut h);
+    let id = format!("rb-{:016x}", h.finish());
+    let a = app.clone();
+    platform::load_rules(app.clone(), id, move || blocker::Blocker::from_lists(&lists).webkit_rules_json(), move || {
+        for wv in a.webviews().into_values().filter(|w| is_tab_label(w.label())) {
+            let url = wv.url().map(|u| u.to_string()).unwrap_or_default();
+            sync_blocking(&a, &wv, &url);
+        }
+    });
+}
+
+#[tauri::command]
+async fn shield_menu(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
+    let win = window.label().to_string();
+    let Some((id, url)) = with(&app, &win, |l| l.active.and_then(|a| l.get(a).map(|t| (a, t.url.clone())))) else { return Ok(()) };
+    let Some(host) = site(&url) else { return Ok(()) };
+    let on = lib(&app, |l| l.blocking_on(&url));
+    let menu = tauri::menu::MenuBuilder::new(&app)
+        .item(&CheckMenuItemBuilder::with_id(format!("b|{win}|toggle|{id}"), format!("Block ads and trackers on {host}")).checked(on).build(&app).map_err(err)?)
+        .build().map_err(err)?;
+    window.popup_menu(&menu).map_err(err)
+}
+
+/// Turn blocking on/off for the tab's site, then reload so the page loads with the new setting.
+fn toggle_blocking(app: &AppHandle, win: &str, id: TabId) -> Res {
+    let url = with(app, win, |l| l.get(id).map(|t| t.url.clone())).ok_or("no such tab")?;
+    lib(app, |l| l.toggle_blocking(&url));
+    save_library_soon(app);
+    let wv = tab_webview(app, win, id)?;
+    sync_blocking(app, &wv, &url);
+    wv.reload().map_err(err)
+}
+
+#[tauri::command]
+async fn popup_allow(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
+    let Some((page, url)) = app.state::<Runtime>().popups.lock().unwrap().remove(window.label()) else { return Ok(()) };
+    lib(&app, |l| l.allow_popups(&page));
+    save_library_soon(&app);
+    open_tab(&app, window.label(), &url)
+}
+
+#[tauri::command]
+async fn popup_dismiss(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
+    app.state::<Runtime>().popups.lock().unwrap().remove(window.label());
+    Ok(())
 }
 
 fn open_tab(app: &AppHandle, win: &str, url: &str) -> Res {
@@ -745,6 +824,7 @@ fn on_popup(app: &AppHandle, id: &str) -> Res {
     let (kind, win) = (p[0], p.get(1).copied().unwrap_or_default());
     let num = |i: usize| p.get(i).and_then(|x| x.parse::<u64>().ok()).ok_or("bad menu id");
     match (kind, p.get(2).copied().unwrap_or_default()) {
+        ("b", "toggle") => toggle_blocking(app, win, num(3)?)?,
         ("pw", _) => return fill_password(app, win, num(2)?, id.splitn(4, '|').nth(3).unwrap_or_default()),
         ("t", "new") => {
             let g = with(app, win, |l| l.new_group(num(3).unwrap_or(0)));
@@ -798,13 +878,23 @@ fn login_hash(app: &AppHandle, origin: &str, user: &str, pass: &str) -> u64 {
 
 /// The only command a website can call. Which tab and which site come from the webview, never from `ev`.
 #[derive(Deserialize)]
-struct PageEvent { kind: String, #[serde(default)] username: String, #[serde(default)] password: String }
+struct PageEvent { kind: String, #[serde(default)] username: String, #[serde(default)] password: String, #[serde(default)] url: String }
 
 #[tauri::command]
 async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
     let (win, id) = parse_label(&app, webview.label()).ok_or("not a tab")?;
+    let page = webview.url().map(|u| u.to_string()).unwrap_or_default();
+    if ev.kind == "popup-blocked" {
+        let ok = ev.url.len() < 4096 && url::Url::parse(&ev.url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"));
+        if !ok { return Ok(()); }
+        if lib(&app, |l| l.popups_ok(&page)) { return open_tab(&app, &win, &ev.url); }
+        let host = site(&page).unwrap_or_default();
+        app.state::<Runtime>().popups.lock().unwrap().insert(win.clone(), (page, ev.url));
+        let _ = app.emit_to(ui_label(&win), "popup-blocked", (win, host));
+        return Ok(());
+    }
     if is_incognito(&win) { return Ok(()); }
-    let Some(origin) = webview.url().ok().and_then(|u| origin_of(u.as_str())) else { return Ok(()) };
+    let Some(origin) = origin_of(&page) else { return Ok(()) };
     match ev.kind.as_str() {
         "login-form" => {
             with(&app, &win, |l| if let Some(t) = l.get_mut(id) { t.login_form = true; });
@@ -1006,7 +1096,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
-        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default() })
+        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
@@ -1017,6 +1107,7 @@ pub fn run() {
             app.set_menu(build_menu(&handle)?)?;
             app.on_menu_event(|app, e| on_menu(app, e.id().as_ref()));
             create_window(&handle, MAIN, None)?;
+            start_blocker(&handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1025,7 +1116,7 @@ pub fn run() {
             downloads_list, show_download,
             tab_menu, group_menu, group_toggle, group_rename, move_tab, tear_start, tear_move, tear_end, attach_tab,
             page_event, password_save, password_never, password_dismiss, password_menu,
-            passwords_list, password_reveal, password_delete, passwords_import
+            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss
         ])
         .run(tauri::generate_context!())
         .expect("error while running R-Browser");

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-popup-allow"
+description = "Enables the popup_allow command without any pre-configured scope."
+commands.allow = ["popup_allow"]
+
+[[permission]]
+identifier = "deny-popup-allow"
+description = "Denies the popup_allow command without any pre-configured scope."
+commands.deny = ["popup_allow"]

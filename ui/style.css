@@ -120,18 +120,19 @@ body.mac #strip { padding-left: 80px; }
 #key[hidden] { display: none; }
 #key:hover { color: var(--signal); }
 
-#savepw { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px auto; height: 26px; padding: 0 4px 0 9px;
+.pill { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px auto; height: 26px; padding: 0 4px 0 9px;
   border-radius: 13px; background: #3b9eff26; color: #cfe6ff; font: 500 12px system-ui, sans-serif; max-width: 460px; }
-#savepw[hidden] { display: none; }
-#savepw > svg { width: 14px; height: 14px; color: var(--signal); }
-#savepw span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-#savepw button:not(.icon) { height: 20px; padding: 0 10px; border: 0; border-radius: 10px; background: var(--signal);
+.pill[hidden] { display: none; }
+.pill > svg { width: 14px; height: 14px; color: var(--signal); }
+.pill span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pill button:not(.icon) { height: 20px; padding: 0 10px; border: 0; border-radius: 10px; background: var(--signal);
   color: #04101f; font: 600 11.5px system-ui, sans-serif; }
 #savepw #pwnever { background: none; color: #9fbbd9; }
 #savepw #pwnever:hover { color: var(--ice); }
-#savepw .icon { width: 20px; height: 20px; }
-#savepw .icon svg { width: 12px; height: 12px; }
-#savepw:not([hidden]) ~ #toast { margin-left: 0; }
+.pill .icon { width: 20px; height: 20px; }
+.pill .icon svg { width: 12px; height: 12px; }
+.pill:not([hidden]) ~ .pill, .pill:not([hidden]) ~ #toast { margin-left: 0; }
+#omni:is([data-state="secure"], [data-state="insecure"]) #chip { cursor: pointer; }
 
 #find { display: flex; align-items: center; gap: 2px; height: 36px; margin-left: 8px; padding: 0 4px 0 12px;
   width: 300px; border-radius: 18px; background: var(--well); border: 1px solid var(--signal); }

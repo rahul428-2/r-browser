@@ -168,7 +168,7 @@ function renderBar() {
   document.body.dataset.state = st;
   document.body.dataset.loading = cur && cur.loading ? "1" : "";
   $("chip").replaceChildren(icon(st === "secure" ? "i-shield" : st === "insecure" ? "i-warn" : "i-search"));
-  $("chip").title = st === "secure" ? "Encrypted connection" : st === "insecure" ? "Not secure: this connection isn't encrypted" : "";
+  $("chip").title = st === "secure" ? "Encrypted connection. Click for ad blocking on this site" : st === "insecure" ? "Not secure: this connection isn't encrypted. Click for ad blocking on this site" : "";
 
   const pretty = $("pretty");
   pretty.replaceChildren();
@@ -355,6 +355,21 @@ me.listen("save-password", (e) => {
 $("pwsave").onclick = () => { hidePw(); invoke("password_save").catch(() => {}); };
 $("pwnever").onclick = () => { hidePw(); invoke("password_never"); };
 $("pwx").onclick = () => { hidePw(); invoke("password_dismiss"); };
+
+// ---- shield chip: per-site blocking switch; blocked pop-up prompt ----
+$("chip").onclick = (e) => { e.preventDefault(); if ($("omni").dataset.state !== "none") invoke("shield_menu").catch(() => {}); };
+let popTimer;
+const hidePop = () => { $("popblk").hidden = true; clearTimeout(popTimer); };
+me.listen("popup-blocked", (e) => {
+  const [win, host] = e.payload;
+  if (win !== myWindow) return;
+  $("popblk").querySelector("span").textContent = `Pop-up blocked on ${host}`;
+  $("popblk").hidden = false;
+  clearTimeout(popTimer);
+  popTimer = setTimeout(() => { hidePop(); invoke("popup_dismiss"); }, 30000);
+});
+$("popallow").onclick = () => { hidePop(); invoke("popup_allow").catch(() => {}); };
+$("popx").onclick = () => { hidePop(); invoke("popup_dismiss"); };
 
 // ---- suggestions from bookmarks + history (native datalist popup) ----
 let sugTimer;

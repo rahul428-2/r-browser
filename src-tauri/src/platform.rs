@@ -1,4 +1,4 @@
-//! OS glue for the password vault: user presence check + keychain-held key.
+//! OS glue: password vault (user presence check + keychain-held key) and native content blocking.
 
 /// Ask the OS who's there: Touch ID, falling back to the login password. Blocks — never call on the main thread.
 #[cfg(target_os = "macos")]
@@ -40,3 +40,91 @@ pub fn vault_key(create: bool) -> Result<zeroize::Zeroizing<[u8; 32]>, String> {
         Err(e) => Err(e.to_string()),
     }
 }
+
+// ---- content blocking: one compiled WebKit content rule list shared by every tab ----
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    /// Main thread only (WebKit objects aren't Send).
+    static RULES: std::cell::RefCell<Option<objc2::rc::Retained<objc2_web_kit::WKContentRuleList>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn rule_store() -> Option<objc2::rc::Retained<objc2_web_kit::WKContentRuleListStore>> {
+    unsafe { objc2_web_kit::WKContentRuleListStore::defaultStore(objc2::MainThreadMarker::new()?) }
+}
+
+/// Keep a list WebKit handed us; false if it's null (not found / failed to compile).
+#[cfg(target_os = "macos")]
+fn keep(list: *mut objc2_web_kit::WKContentRuleList) -> bool {
+    let Some(l) = (unsafe { objc2::rc::Retained::retain(list) }) else { return false };
+    RULES.with(|r| *r.borrow_mut() = Some(l));
+    true
+}
+
+/// Load rule list `id` from WebKit's on-disk store, or, the first time this list version is seen, build `json()`
+/// off the main thread and compile it (seconds; tabs load unblocked meanwhile). Then delete older versions and
+/// call `ready`. Call on the main thread.
+#[cfg(target_os = "macos")]
+pub fn load_rules(app: tauri::AppHandle, id: String, json: impl FnOnce() -> String + Send + 'static, ready: impl Fn() + Send + Sync + 'static) {
+    use block2::RcBlock;
+    use objc2_foundation::{NSError, NSString};
+    use objc2_web_kit::WKContentRuleList;
+    use std::sync::{Arc, Mutex};
+
+    let Some(store) = rule_store() else { return };
+    let ready = Arc::new(ready);
+    let json = Mutex::new(Some(json));
+    let key = id.clone();
+    let found = RcBlock::new(move |list: *mut WKContentRuleList, _: *mut NSError| {
+        if keep(list) { prune(&key); return ready(); }
+        let Some(json) = json.lock().unwrap().take() else { return };
+        let (app, key, ready) = (app.clone(), key.clone(), ready.clone());
+        std::thread::spawn(move || {
+            let text = json();
+            let _ = app.run_on_main_thread(move || {
+                let Some(store) = rule_store() else { return };
+                let k2 = key.clone();
+                let done = RcBlock::new(move |list: *mut WKContentRuleList, err: *mut NSError| {
+                    if keep(list) { prune(&k2); ready(); }
+                    else if let Some(e) = unsafe { err.as_ref() } { eprintln!("content blocker: {}", e.localizedDescription()); }
+                });
+                unsafe { store.compileContentRuleListForIdentifier_encodedContentRuleList_completionHandler(Some(&NSString::from_str(&key)), Some(&NSString::from_str(&text)), Some(&done)) };
+            });
+        });
+    });
+    unsafe { store.lookUpContentRuleListForIdentifier_completionHandler(Some(&NSString::from_str(&id)), Some(&found)) };
+}
+
+/// Drop compiled lists other than `id` (each is ~10 MB on disk).
+#[cfg(target_os = "macos")]
+fn prune(id: &str) {
+    use block2::RcBlock;
+    use objc2_foundation::{NSArray, NSError, NSString};
+    let Some(store) = rule_store() else { return };
+    let (cur, s2) = (id.to_string(), store.clone());
+    let got = RcBlock::new(move |ids: *mut NSArray<NSString>| {
+        let Some(ids) = (unsafe { ids.as_ref() }) else { return };
+        for old in ids.iter().filter(|i| i.to_string() != cur) {
+            unsafe { s2.removeContentRuleListForIdentifier_completionHandler(Some(&old), Some(&RcBlock::new(|_: *mut NSError| {}))) };
+        }
+    });
+    unsafe { store.getAvailableContentRuleListIdentifiers(Some(&got)) };
+}
+
+/// Turn blocking on or off for one tab (off for sites the user exempted). No-op until the list is loaded.
+#[cfg(target_os = "macos")]
+pub fn set_blocking(wv: &tauri::Webview, on: bool) {
+    let _ = wv.with_webview(move |p| unsafe {
+        let Some(c) = (p.controller() as *const objc2_web_kit::WKUserContentController).as_ref() else { return };
+        c.removeAllContentRuleLists();
+        if on { RULES.with(|r| if let Some(l) = &*r.borrow() { c.addContentRuleList(l) }); }
+    });
+}
+
+// ponytail: WebView2 (WebResourceRequested + Blocker::should_block) and WebKitGTK (UserContentFilterStore) glue
+// lands with Task 14, when CI can compile and test those targets; until then Windows/Linux load pages unblocked.
+#[cfg(not(target_os = "macos"))]
+pub fn load_rules(_: tauri::AppHandle, _: String, _: impl FnOnce() -> String + Send + 'static, _: impl Fn() + Send + Sync + 'static) {}
+#[cfg(not(target_os = "macos"))]
+pub fn set_blocking(_: &tauri::Webview, _: bool) {}

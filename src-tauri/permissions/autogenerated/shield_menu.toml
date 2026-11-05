@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-shield-menu"
+description = "Enables the shield_menu command without any pre-configured scope."
+commands.allow = ["shield_menu"]
+
+[[permission]]
+identifier = "deny-shield-menu"
+description = "Denies the shield_menu command without any pre-configured scope."
+commands.deny = ["shield_menu"]

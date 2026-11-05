@@ -44,6 +44,9 @@
     "allow-tear-start",
     "allow-tear-move",
     "allow-tear-end",
-    "allow-attach-tab"
+    "allow-attach-tab",
+    "allow-shield-menu",
+    "allow-popup-allow",
+    "allow-popup-dismiss"
   ]
 }

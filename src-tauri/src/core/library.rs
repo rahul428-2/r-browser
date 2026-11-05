@@ -25,6 +25,18 @@ pub struct Library {
     /// Origins where the user said "never save passwords" (no passwords here, those live in vault.bin).
     #[serde(default)]
     pub never_save: Vec<String>,
+    /// Hosts where the user switched ad/tracker blocking off.
+    #[serde(default)]
+    pub no_block: Vec<String>,
+    /// Hosts allowed to open pop-ups without a click.
+    #[serde(default)]
+    pub popups: Vec<String>,
+}
+
+/// The site a per-site setting is keyed on: the host of an http(s) URL.
+pub fn site(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    matches!(u.scheme(), "http" | "https").then(|| u.host_str().map(str::to_lowercase)).flatten()
 }
 
 fn matches(q: &str, url: &str, title: &str) -> bool {
@@ -32,6 +44,20 @@ fn matches(q: &str, url: &str, title: &str) -> bool {
 }
 
 impl Library {
+    pub fn blocking_on(&self, url: &str) -> bool { site(url).is_none_or(|h| !self.no_block.contains(&h)) }
+
+    /// Flip blocking for `url`'s site; returns true if the site is now exempted.
+    pub fn toggle_blocking(&mut self, url: &str) -> bool {
+        let Some(h) = site(url) else { return false };
+        if let Some(i) = self.no_block.iter().position(|x| *x == h) { self.no_block.remove(i); false } else { self.no_block.push(h); true }
+    }
+
+    pub fn popups_ok(&self, url: &str) -> bool { site(url).is_some_and(|h| self.popups.contains(&h)) }
+
+    pub fn allow_popups(&mut self, url: &str) {
+        if let Some(h) = site(url).filter(|h| !self.popups.contains(h)) { self.popups.push(h); }
+    }
+
     /// Incognito and new-tab visits are never recorded.
     pub fn record_visit(&mut self, url: &str, title: &str, at: u64, incognito: bool) {
         if incognito || is_newtab(url) || !(url.starts_with("http://") || url.starts_with("https://")) { return; }
@@ -129,6 +155,26 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocking_off_only_for_exempted_site() {
+        let mut l = Library::default();
+        assert!(l.blocking_on("https://news.com/a"));
+        assert!(l.toggle_blocking("https://news.com/a")); // now exempted
+        assert!(!l.blocking_on("https://news.com/b"));
+        assert!(l.blocking_on("https://other.com/"));
+        assert!(!l.toggle_blocking("https://news.com/")); // back on
+        assert!(l.blocking_on("https://news.com/"));
+        assert!(!l.toggle_blocking("rb://history")); // internal pages have no switch
+    }
+
+    #[test]
+    fn popups_allowed_per_site() {
+        let mut l = Library::default();
+        assert!(!l.popups_ok("https://a.com/x"));
+        l.allow_popups("https://a.com/x");
+        assert!(l.popups_ok("https://a.com/y") && !l.popups_ok("https://b.com/"));
+    }
 
     #[test]
     fn incognito_visit_not_recorded() {

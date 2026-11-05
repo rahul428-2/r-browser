@@ -28,9 +28,12 @@
   <header id="strip" data-tauri-drag-region>
     <div id="tabs" role="tablist"></div>
     <button id="newtab" class="icon" aria-label="New tab"><svg><use href="#i-plus"/></svg></button>
-    <div id="savepw" role="alert" hidden><svg><use href="#i-key"/></svg><span></span>
+    <div id="savepw" class="pill" role="alert" hidden><svg><use href="#i-key"/></svg><span></span>
       <button id="pwsave">Save</button><button id="pwnever">Never</button>
       <button id="pwx" class="icon" aria-label="Not now"><svg><use href="#i-x"/></svg></button></div>
+    <div id="popblk" class="pill" role="alert" hidden><svg><use href="#i-shield"/></svg><span></span>
+      <button id="popallow">Allow</button>
+      <button id="popx" class="icon" aria-label="Keep blocking"><svg><use href="#i-x"/></svg></button></div>
     <button id="toast" hidden><svg><use href="#i-down"/></svg><span></span></button>
     <span id="private" title="Incognito: no history, cookies or site data are kept after you close this window"><svg><use href="#i-mask"/></svg>Incognito</span>
   </header>

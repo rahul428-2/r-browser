@@ -27,6 +27,10 @@
 
 - **Content-Disposition ignored on macOS** (wry only downloads MIME types WebKit can't show; `attachment` JSON/PDF open inline) → Task 10 (downloads hook): override the navigation-response policy.
 - **`__TAURI_INTERNALS__` is injected into every page** → sites can detect R-Browser; Task 11 (fingerprint) must hide it from remote pages while keeping `page_event`.
+- **Ad/tracker blocking is macOS-only so far** (Task 4): WebView2 `WebResourceRequested` + `Blocker::should_block`/`cosmetic_css` and WebKitGTK `UserContentFilterStore` glue → Task 14, when CI can compile and test those targets. `platform::load_rules`/`set_blocking` are no-ops there.
+- **Filter lists don't refresh weekly yet** (Task 4): bundled copies only; re-run `scripts/fetch_lists.sh` per release. Weekly in-app refresh → Task 14 (with the updater).
+- **d3ward.github.io/toolz/adblock is archived** (Task 4 Step 7): verified instead with a local page loading gtag / Hotjar / comScore / LinkedIn Insight + a jQuery control and an EasyList `##.ADBox` element: blocking on → 4/4 blocked, jQuery loaded, box hidden; site switched off → all loaded.
+- **Blocking switch is per host, applied at navigation start** (Task 4): the rule list is swapped on the tab's content controller when a page starts loading, so the main document request itself is never blocked (same as ABP's default).
 - **Incognito tabs are isolated from each other on macOS** (wry gives each incognito webview its own non-persistent store; Chrome shares one per incognito window). Stricter than Chrome; acceptable for v1.
 
 ## Review Focus
@@ -143,7 +147,7 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 - Produces: `Blocker::from_lists(lists: &[String]) -> Blocker`; `should_block(&self, url: &str, source_url: &str, request_type: &str) -> bool`; `cosmetic_css(&self, url: &str) -> String`; `webkit_rules_json(&self) -> String` (via adblock `content-blocking` conversion); `platform::install_blocker(webview: &Webview, blocker: &Blocker)`.
 - Lists: EasyList, EasyPrivacy, uBlock filters, Peter Lowe's, NoCoin (also used by Task 10). `fetch_lists.sh` downloads them plus Tranco top-1m → `resources/top10k.txt` (first 10,000 domains).
 
-- [ ] **Step 1: Failing tests** (use a tiny inline list, not the real files)
+- [x] **Step 1: Failing tests** (use a tiny inline list, not the real files)
 
 ```rust
 #[test] fn blocks_listed_third_party() { /* "||ads.example^" ; should_block("https://ads.example/a.js","https://news.com/","script") */ }
@@ -153,12 +157,12 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 #[test] fn webkit_json_is_valid_json_array() {}
 ```
 
-- [ ] **Step 2: Run, FAIL. Step 3: Implement `blocker.rs`.**
-- [ ] **Step 4: Platform glue.** macOS: compile `webkit_rules_json` with `WKContentRuleListStore` once (cache by list hash), add to each tab's `WKUserContentController` via `webview.with_webview`. Linux: `WebKitUserContentFilterStore` with the same JSON. Windows: `AddWebResourceRequestedFilter("*", ALL)` + `should_block` in the handler, respond with an empty 204. All: inject `cosmetic_css` at document start.
-- [ ] **Step 5: `popup.js`:** wrap `window.open`; allow only if `navigator.userActivation.isActive`; otherwise call `page_event({kind:"popup-blocked", url})` → UI shows "Pop-up blocked — allow?" in the URL bar (allow = remember per site).
-- [ ] **Step 6: Per-site "disable blocking" toggle** in the URL-bar shield menu (stored in settings).
-- [ ] **Step 7: Verify** tests pass; manual: `https://d3ward.github.io/toolz/adblock` scores high on all 3 OSes (macOS locally; others in Task 14 CI artifacts on VMs).
-- [ ] **Step 8: Commit** `feat: built-in ad, tracker and popup blocking`
+- [x] **Step 2: Run, FAIL. Step 3: Implement `blocker.rs`.**
+- [x] **Step 4: Platform glue.** macOS: compile `webkit_rules_json` with `WKContentRuleListStore` once (cache by list hash), add to each tab's `WKUserContentController` via `webview.with_webview`. Linux: `WebKitUserContentFilterStore` with the same JSON. Windows: `AddWebResourceRequestedFilter("*", ALL)` + `should_block` in the handler, respond with an empty 204. All: inject `cosmetic_css` at document start.
+- [x] **Step 5: `popup.js`:** wrap `window.open`; allow only if `navigator.userActivation.isActive`; otherwise call `page_event({kind:"popup-blocked", url})` → UI shows "Pop-up blocked — allow?" in the URL bar (allow = remember per site).
+- [x] **Step 6: Per-site "disable blocking" toggle** in the URL-bar shield menu (stored in settings).
+- [x] **Step 7: Verify** tests pass; manual: `https://d3ward.github.io/toolz/adblock` scores high on all 3 OSes (macOS locally; others in Task 14 CI artifacts on VMs).
+- [x] **Step 8: Commit** `feat: built-in ad, tracker and popup blocking`
 
 ---
 
