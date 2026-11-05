@@ -329,9 +329,9 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
 
 fn is_tab_label(l: &str) -> bool { l.starts_with("tab-") || l.starts_with("itab-") }
 
-/// Blocking is on for every tab except sites the user switched it off for.
+/// Blocking is on for every tab except sites the user switched it off for (never off in incognito).
 fn sync_blocking(app: &AppHandle, wv: &Webview, url: &str) {
-    platform::set_blocking(wv, lib(app, |l| l.blocking_on(url)));
+    platform::set_blocking(wv, is_incognito_label(wv.label()) || lib(app, |l| l.blocking_on(url)));
 }
 
 /// Load (or, once per list version, compile) the bundled filter lists, then switch blocking on in every open tab.
@@ -355,7 +355,7 @@ async fn shield_menu(webview: Webview, app: AppHandle, window: Window) -> Res { 
     let win = window.label().to_string();
     let Some((id, url)) = with(&app, &win, |l| l.active.and_then(|a| l.get(a).map(|t| (a, t.url.clone())))) else { return Ok(()) };
     let Some(host) = site(&url) else { return Ok(()) };
-    let on = lib(&app, |l| l.blocking_on(&url));
+    let on = is_incognito(&win) || lib(&app, |l| l.blocking_on(&url));
     // Incognito can't change site settings: they'd be saved to disk and reveal where you went.
     let text = if is_incognito(&win) { format!("Block ads and trackers on {host} (always on in incognito)") } else { format!("Block ads and trackers on {host}") };
     let menu = tauri::menu::MenuBuilder::new(&app)
@@ -378,6 +378,9 @@ fn toggle_blocking(app: &AppHandle, win: &str, id: TabId) -> Res {
 #[tauri::command]
 async fn popup_allow(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
     let Some((page, url)) = app.state::<Runtime>().popups.lock().unwrap().remove(window.label()) else { return Ok(()) };
+    // The prompt named the site in the current tab; if that changed since, Allow doesn't apply to it.
+    let cur = active_url(&app, window.label()).map(|(u, _)| u).unwrap_or_default();
+    if site(&cur).is_none() || site(&cur) != site(&page) { return Ok(()); }
     if !is_incognito(window.label()) {
         lib(&app, |l| l.allow_popups(&page));
         save_library_soon(&app);
@@ -891,7 +894,8 @@ async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
     let page = webview.url().map(|u| u.to_string()).unwrap_or_default();
     if ev.kind == "popup-blocked" {
         let ok = ev.url.len() < 4096 && url::Url::parse(&ev.url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"));
-        if !ok { return Ok(()); }
+        // Only the tab you're looking at can raise the prompt, so a background tab can't swap its pop-up in behind it.
+        if !ok || with(&app, &win, |l| l.active) != Some(id) { return Ok(()); }
         if lib(&app, |l| l.popups_ok(&page)) { return open_tab(&app, &win, &ev.url); }
         let host = site(&page).unwrap_or_default();
         app.state::<Runtime>().popups.lock().unwrap().insert(win.clone(), (page, ev.url));
