@@ -41,6 +41,10 @@ struct Runtime {
     hint: Mutex<Option<String>>,
     /// Pop-up waiting for the user's Allow, per window: (page that tried it, pop-up URL).
     popups: Mutex<HashMap<String, (String, String)>>,
+    /// WKWebView pointer -> tab webview label, to find the tab a load error belongs to.
+    engine: Mutex<HashMap<usize, String>>,
+    /// Tabs showing a "can't open this site" page: label -> the URL that failed (Reload retries it).
+    failed: Mutex<HashMap<String, String>>,
 }
 
 /// Password vault runtime state. Plaintext only exists inside `with_vault`.
@@ -274,6 +278,7 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
 
 fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Result<Webview> {
     let w = app.get_window(win).ok_or(tauri::Error::WindowNotFound)?;
+    platform::hook_load_failed();
     let (width, h) = content_area(&w);
     let (a1, a2, a3, a4) = (app.clone(), app.clone(), app.clone(), app.clone());
     let me = label(win, id);
@@ -285,6 +290,12 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             let url = to_rb(p.url().as_str());
             let started = p.event() == PageLoadEvent::Started;
             if started { sync_blocking(&a1, &wv, p.url().as_str()); }
+            let failed = {
+                let rt = a1.state::<Runtime>();
+                let mut f = rt.failed.lock().unwrap();
+                if started && f.get(wv.label()).is_some_and(|u| u != p.url().as_str()) { f.remove(wv.label()); }
+                f.contains_key(wv.label())
+            };
             let title = with(&a1, &win, |l| l.get_mut(id).map(|t| {
                 t.url = url.clone();
                 if started { t.login_form = false; }
@@ -294,7 +305,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             if p.event() == PageLoadEvent::Finished {
                 a1.state::<Runtime>().committed.lock().unwrap().insert(wv.label().to_string(), url.clone());
             }
-            if p.event() == PageLoadEvent::Finished && !is_incognito(&win) {
+            if p.event() == PageLoadEvent::Finished && !is_incognito(&win) && !failed {
                 lib(&a1, |l| l.record_visit(&url, &title, now_secs(), false));
                 save_library_soon(&a1);
             }
@@ -322,7 +333,35 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
     if !is_incognito(win) { builder = builder.initialization_script(include_str!("inject/login.js")); }
     let wv = w.add_child(builder, LogicalPosition::new(0.0, BAR), LogicalSize::new(width, h))?;
     sync_blocking(app, &wv, url);
+    #[cfg(target_os = "macos")]
+    {
+        let (a, l) = (app.clone(), wv.label().to_string());
+        let _ = wv.with_webview(move |p| { a.state::<Runtime>().engine.lock().unwrap().insert(p.inner() as usize, l); });
+    }
     Ok(wv)
+}
+
+// ---- sites that can't be opened ----
+
+/// A tab's page failed to load: show why, in the tab, instead of a blank page.
+fn on_load_failed(app: &AppHandle, engine: usize, url: String, domain: String, code: i64, desc: String) {
+    let Some(label) = app.state::<Runtime>().engine.lock().unwrap().get(&engine).cloned() else { return };
+    let url = if url.is_empty() {
+        parse_label(app, &label).and_then(|(w, id)| with(app, &w, |l| l.get(id).map(|t| t.url.clone()))).unwrap_or_default()
+    } else { url };
+    if !url.starts_with("http") { return; }
+    let (Some(wv), Some(html)) = (app.get_webview(&label), core::errors::error_page(&url, &domain, code, &desc)) else { return };
+    app.state::<Runtime>().failed.lock().unwrap().insert(label, url.clone());
+    platform::show_html(&wv, html, url);
+}
+
+/// Reload, or retry the site if the tab is showing a "can't open" page (reloading that would just reload the page).
+fn reload_tab(app: &AppHandle, win: &str, id: TabId) -> Res {
+    let wv = tab_webview(app, win, id)?;
+    match app.state::<Runtime>().failed.lock().unwrap().remove(wv.label()).and_then(|u| Url::parse(&u).ok()) {
+        Some(u) => wv.navigate(u).map_err(err),
+        None => wv.reload().map_err(err),
+    }
 }
 
 // ---- ad / tracker blocking ----
@@ -372,7 +411,7 @@ fn toggle_blocking(app: &AppHandle, win: &str, id: TabId) -> Res {
     save_library_soon(app);
     let wv = tab_webview(app, win, id)?;
     sync_blocking(app, &wv, &url);
-    wv.reload().map_err(err)
+    reload_tab(app, win, id)
 }
 
 #[tauri::command]
@@ -674,7 +713,7 @@ async fn go_back(webview: Webview, app: AppHandle, window: Window, id: TabId) ->
 async fn go_forward(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?; eval_in(&app, window.label(), id, "history.forward()") }
 
 #[tauri::command]
-async fn reload(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?; tab_webview(&app, window.label(), id)?.reload().map_err(err) }
+async fn reload(webview: Webview, app: AppHandle, window: Window, id: TabId) -> Res { trusted(&webview)?; reload_tab(&app, window.label(), id) }
 
 #[tauri::command]
 async fn toggle_bookmark(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?; toggle_bookmark_active(&app, window.label()) }
@@ -1080,7 +1119,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             ("close-tab", Some(c)) => close(&app, &win, c),
             ("focus-url", _) => { focus_ui(&app, &win, "document.getElementById('url').focus()"); Ok(()) }
             ("find", _) => { focus_ui(&app, &win, "openFind()"); Ok(()) }
-            ("reload", Some(c)) => tab_webview(&app, &win, c).and_then(|w| w.reload().map_err(err)),
+            ("reload", Some(c)) => reload_tab(&app, &win, c),
             ("back", Some(c)) => eval_in(&app, &win, c, "history.back()"),
             ("forward", Some(c)) => eval_in(&app, &win, c, "history.forward()"),
             ("print", Some(c)) => tab_webview(&app, &win, c).and_then(|w| w.print().map_err(err)),
@@ -1105,7 +1144,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
-        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default() })
+        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
@@ -1117,6 +1156,8 @@ pub fn run() {
             app.on_menu_event(|app, e| on_menu(app, e.id().as_ref()));
             create_window(&handle, MAIN, None)?;
             start_blocker(&handle);
+            let h = handle.clone();
+            platform::on_load_failed(move |e, url, domain, code, desc| on_load_failed(&h, e, url, domain, code, desc));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

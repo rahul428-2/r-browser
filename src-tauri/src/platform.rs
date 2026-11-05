@@ -128,3 +128,72 @@ pub fn set_blocking(wv: &tauri::Webview, on: bool) {
 pub fn load_rules(_: tauri::AppHandle, _: String, _: impl FnOnce() -> String + Send + 'static, _: impl Fn() + Send + Sync + 'static) {}
 #[cfg(not(target_os = "macos"))]
 pub fn set_blocking(_: &tauri::Webview, _: bool) {}
+
+// ---- failed page loads: wry ignores WebKit's "navigation failed" callbacks, so pages just stayed blank ----
+
+/// (WKWebView pointer, failing URL, error domain, error code, error text)
+#[cfg(target_os = "macos")]
+type LoadFailed = Box<dyn Fn(usize, String, String, i64, String) + Send + Sync>;
+#[cfg(target_os = "macos")]
+static LOAD_FAILED: std::sync::OnceLock<LoadFailed> = std::sync::OnceLock::new();
+
+/// Call `f` whenever a page fails to load (takes effect once `hook_load_failed` succeeds).
+#[cfg(target_os = "macos")]
+pub fn on_load_failed(f: impl Fn(usize, String, String, i64, String) + Send + Sync + 'static) {
+    let _ = LOAD_FAILED.set(Box::new(f));
+}
+
+/// Teach wry's navigation delegate class the two "failed" callbacks. Call before creating each tab webview:
+/// the class only exists once wry has made its first webview, and WebKit checks the delegate's methods when
+/// it's attached, so this must run before the tab is created. Does the work once.
+#[cfg(target_os = "macos")]
+pub fn hook_load_failed() {
+    use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+    use objc2::{msg_send, sel};
+    use objc2_foundation::{NSError, NSString};
+
+    unsafe extern "C-unwind" fn failed(_this: *mut AnyObject, _cmd: Sel, wv: *mut AnyObject, _nav: *mut AnyObject, err: *mut NSError) {
+        let (Some(cb), Some(e)) = (LOAD_FAILED.get(), unsafe { err.as_ref() }) else { return };
+        // The failing URL is in userInfo as an NSURL ("NSErrorFailingURLKey"); older errors use a string key.
+        let url = unsafe {
+            let info: *mut AnyObject = msg_send![e, userInfo];
+            let get = |k: &str| -> *mut AnyObject { if info.is_null() { std::ptr::null_mut() } else { msg_send![info, objectForKey: &*NSString::from_str(k)] } };
+            let u = get("NSErrorFailingURLKey");
+            let s: *mut NSString = if u.is_null() { get("NSErrorFailingURLStringKey").cast() } else { msg_send![u, absoluteString] };
+            s.as_ref().map(|s| s.to_string()).unwrap_or_default()
+        };
+        cb(wv as usize, url, e.domain().to_string(), e.code() as i64, e.localizedDescription().to_string());
+    }
+
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DONE.load(std::sync::atomic::Ordering::Relaxed) { return; }
+    // wry names it "<module path>::WryNavigationDelegate<wry version>", so look it up instead of hard-coding.
+    let Some(cls) = AnyClass::classes().iter().copied().find(|c| c.name().to_str().is_ok_and(|n| n.contains("::WryNavigationDelegate"))) else {
+        eprintln!("load errors: wry delegate class not found yet");
+        return;
+    };
+    DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    let imp: Imp = unsafe { std::mem::transmute(failed as unsafe extern "C-unwind" fn(_, _, _, _, _)) };
+    for s in [sel!(webView:didFailProvisionalNavigation:withError:), sel!(webView:didFailNavigation:withError:)] {
+        unsafe { objc2::ffi::class_addMethod(cls as *const AnyClass as *mut AnyClass, s, imp, c"v@:@@@".as_ptr()) };
+    }
+}
+
+/// Show `html` in the tab, with `url` as its address (so links and the address bar still point at the site).
+#[cfg(target_os = "macos")]
+pub fn show_html(wv: &tauri::Webview, html: String, url: String) {
+    let _ = wv.with_webview(move |p| unsafe {
+        use objc2::{msg_send, runtime::AnyObject};
+        use objc2_foundation::{NSString, NSURL};
+        let base = NSURL::URLWithString(&NSString::from_str(&url));
+        let _: *mut AnyObject = msg_send![p.inner() as *mut AnyObject, loadHTMLString: &*NSString::from_str(&html), baseURL: base.as_deref()];
+    });
+}
+
+// ponytail: WebView2 has its own error page; WebKitGTK's load-failed hook comes with the Task 14 Linux glue.
+#[cfg(not(target_os = "macos"))]
+pub fn on_load_failed(_: impl Fn(usize, String, String, i64, String) + Send + Sync + 'static) {}
+#[cfg(not(target_os = "macos"))]
+pub fn hook_load_failed() {}
+#[cfg(not(target_os = "macos"))]
+pub fn show_html(_: &tauri::Webview, _: String, _: String) {}
