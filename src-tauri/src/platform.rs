@@ -183,8 +183,13 @@ unsafe extern "C-unwind" fn decide_policy_prefs(this: *mut objc2::runtime::AnyOb
             let lock = LOCKDOWN.get().is_some_and(|f| f(url));
             let _: () = msg_send![prefs, setLockdownModeEnabled: Bool::new(lock)];
         }
-        // Hand the plain decision (cancel / allow / redirect) back to WebKit with these preferences.
-        let bridge = block2::RcBlock::new(move |policy: isize| (*handler).call((policy, prefs)));
+        // Hand the plain decision (cancel / allow / redirect) back to WebKit with these preferences. The bridge owns
+        // its own references, so it's safe even if the decision is made after this method returns.
+        let Some(h) = block2::RcBlock::copy(handler) else { return }; // no handler: nothing to answer
+        let p = objc2::rc::Retained::retain(prefs);
+        let bridge = block2::RcBlock::new(move |policy: isize| {
+            h.call((policy, p.as_ref().map_or(std::ptr::null_mut(), |p| objc2::rc::Retained::as_ptr(p) as *mut AnyObject)))
+        });
         decide_policy(this, sel!(webView:decidePolicyForNavigationAction:decisionHandler:), wv, action, &*bridge as *const _ as *mut _);
     }
 }

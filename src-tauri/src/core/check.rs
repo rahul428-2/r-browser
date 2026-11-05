@@ -64,7 +64,8 @@ impl Checker {
     pub fn domain_checks(&self, url: &str) -> Result<(), Fail> {
         let u = url::Url::parse(url).map_err(|_| Fail::NotHttps)?;
         if u.scheme() != "https" { return Err(Fail::NotHttps); }
-        let host = u.host_str().ok_or(Fail::NotHttps)?.to_ascii_lowercase();
+        // "coinminer.net." is the same host as "coinminer.net": compare without the trailing dot.
+        let host = u.host_str().ok_or(Fail::NotHttps)?.trim_end_matches('.').to_ascii_lowercase();
         if host.split('.').any(|l| l.starts_with("xn--")) { return Err(Fail::Idn); }
         let mut h = host.as_str();
         loop {
@@ -145,6 +146,14 @@ mod tests {
         let c = Checker::new(&top(), &lists());
         assert_eq!(c.domain_checks("https://cdn.coinminer.net/"), Err(Fail::Listed));
         assert_eq!(c.domain_checks("https://adserver.example/x"), Err(Fail::Listed));
+    }
+
+    #[test]
+    fn trailing_dot_is_the_same_host() {
+        let c = Checker::new(&top(), &lists());
+        assert_eq!(c.domain_checks("https://cdn.coinminer.net./"), Err(Fail::Listed));
+        assert_eq!(c.domain_checks("https://paypa1.com./"), Err(Fail::Lookalike("paypal.com".into())));
+        assert_eq!(crate::core::trust::site_of("https://jvns.ca./x").as_deref(), Some("jvns.ca"));
     }
 
     #[test]

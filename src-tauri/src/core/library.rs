@@ -86,7 +86,8 @@ impl Library {
         self.history.iter().rev().filter(|v| matches(&q, &v.url, &v.title)).take(limit).collect()
     }
 
-    pub fn clear_history(&mut self) { self.history.clear(); }
+    /// Also forgets which sites passed the safety check: that list is a record of where you've been.
+    pub fn clear_history(&mut self) { self.history.clear(); self.checked.clear(); }
 
     pub fn is_bookmarked(&self, url: &str) -> bool { self.bookmarks.iter().any(|b| b.url == url) }
 
@@ -180,6 +181,14 @@ mod tests {
         assert!(!l.popups_ok("https://a.com/x"));
         l.allow_popups("https://a.com/x");
         assert!(l.popups_ok("https://a.com/y") && !l.popups_ok("https://b.com/"));
+    }
+
+    #[test]
+    fn clear_history_forgets_checked_sites() {
+        let mut l = Library { checked: vec!["jvns.ca".into()], trusted: vec!["klh.edu.in".into()], ..Library::default() };
+        l.clear_history();
+        assert!(l.checked.is_empty());
+        assert_eq!(l.trusted, vec!["klh.edu.in".to_string()]); // a choice the user made, not history
     }
 
     #[test]

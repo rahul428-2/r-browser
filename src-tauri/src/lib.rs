@@ -933,7 +933,12 @@ fn suggest(webview: Webview, app: AppHandle, query: String) -> Result<Vec<Sugges
 fn history_search(webview: Webview, app: AppHandle, query: String) -> Result<Vec<Visit>, String> { trusted(&webview)?; Ok(lib(&app, |l| l.search_history(&query, 500).into_iter().cloned().collect())) }
 
 #[tauri::command]
-fn history_clear(webview: Webview, app: AppHandle) -> Res { trusted(&webview)?; lib(&app, |l| l.clear_history()); save_library_soon(&app); Ok(()) }
+fn history_clear(webview: Webview, app: AppHandle) -> Res { trusted(&webview)?;
+    let kept = lib(&app, |l| { l.clear_history(); l.trusted.clone() });
+    app.state::<Trusted>().0.lock().unwrap().set_user(kept);
+    save_library_soon(&app);
+    Ok(())
+}
 
 #[tauri::command]
 fn bookmarks_list(webview: Webview, app: AppHandle) -> Result<Vec<Bookmark>, String> { trusted(&webview)?; Ok(lib(&app, |l| l.bookmarks.iter().rev().cloned().collect())) }

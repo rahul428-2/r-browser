@@ -15,7 +15,7 @@ pub struct TrustDb {
 /// `evil.github.io` (github.io is a public suffix, so every subdomain is a different owner). Hosts are compared
 /// in their punycode (xn--) form, so a lookalike in another alphabet never equals the real name.
 pub fn registrable(host: &str) -> Option<String> {
-    psl::domain_str(&host.to_ascii_lowercase()).map(String::from)
+    psl::domain_str(&host.trim_end_matches('.').to_ascii_lowercase()).map(String::from)
 }
 
 /// What a site is trusted under: the exact address for an IP, the registrable domain for a name. A `blob:`
@@ -49,6 +49,9 @@ impl TrustDb {
             _ => Trust::Unverified,
         }
     }
+
+    /// Replace the user-trusted / checked sites (after clearing history forgets the checked ones).
+    pub fn set_user(&mut self, domains: impl IntoIterator<Item = String>) { self.user = domains.into_iter().collect(); }
 
     /// Treat `domain` (a `site_of` key) as verified from now on.
     pub fn add(&mut self, domain: &str) { self.user.insert(domain.to_string()); }
