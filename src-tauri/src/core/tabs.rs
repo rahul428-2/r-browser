@@ -65,10 +65,12 @@ pub fn to_rb(url: &str) -> String {
     }
 }
 
-/// `rb://history` -> `pages/history.html` (only plain names, so no path tricks).
+/// `rb://history` -> `pages/history.html` (only plain names, so no path tricks); a `?query` is kept.
 pub fn rb_page(url: &str) -> Option<String> {
-    let name = url.strip_prefix("rb://")?.trim_end_matches('/');
-    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric())).then(|| format!("pages/{name}.html"))
+    let (name, query) = match url.strip_prefix("rb://")?.split_once('?') { Some((n, q)) => (n, Some(q)), None => (url.strip_prefix("rb://")?, None) };
+    let name = name.trim_end_matches('/');
+    let ok = !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric());
+    ok.then(|| match query { Some(q) => format!("pages/{name}.html?{q}"), None => format!("pages/{name}.html") })
 }
 
 /// Tab ids are unique across all windows, so a tab keeps its id (and webview) when torn off into another window.

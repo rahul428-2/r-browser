@@ -36,6 +36,7 @@
     "allow-passwords-list",
     "allow-password-reveal",
     "allow-password-delete",
-    "allow-passwords-import"
+    "allow-passwords-import",
+    "allow-insecure-continue"
   ]
 }

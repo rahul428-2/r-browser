@@ -41,6 +41,7 @@ fn main() {
         "shield_menu",
         "popup_allow",
         "popup_dismiss",
+        "insecure_continue",
     ];
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(commands)))
         .expect("tauri build");

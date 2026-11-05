@@ -31,6 +31,7 @@
 - **Filter lists don't refresh weekly yet** (Task 4): bundled copies only; re-run `scripts/fetch_lists.sh` per release. Weekly in-app refresh → Task 14 (with the updater).
 - **d3ward.github.io/toolz/adblock is archived** (Task 4 Step 7): verified instead with a local page loading gtag / Hotjar / comScore / LinkedIn Insight + a jQuery control and an EasyList `##.ADBox` element: blocking on → 4/4 blocked, jQuery loaded, box hidden; site switched off → all loaded.
 - **Blocking switch is per host, applied at navigation start** (Task 4): the rule list is swapped on the tab's content controller when a page starts loading, so the main document request itself is never blocked (same as ABP's default).
+- **HTTPS-only is macOS-only so far** (Task 5): wry's navigation hook sees every frame, so the upgrade wraps wry's `decidePolicyForNavigationAction` (main frame only) at runtime. WebView2 (`NavigationStarting`) / WebKitGTK → Task 14. `https::upgrade` takes the session allow-list as a parameter; explicit ports, private IPs and intranet names (no dot, .local, .lan, .internal, .home.arpa) are never upgraded. An https attempt that redirects straight back to http within 15 s counts as "no secure version". Only `rb://insecure` (not blocked/warning) exists yet — those belong to Tasks 6/10.
 - **Incognito tabs are isolated from each other on macOS** (wry gives each incognito webview its own non-persistent store; Chrome shares one per incognito window). Stricter than Chrome; acceptable for v1.
 
 ## Review Focus
@@ -172,11 +173,11 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 
 **Interfaces:** `https::upgrade(url: &str) -> Option<String>` (None if already https, rb://, localhost, private IP, or user-allowed host); internal page URL builders `rb://insecure?url=<enc>`, `rb://blocked?url=<enc>&reason=<code>`, `rb://warning?reason=<code>`.
 
-- [ ] **Step 1: Failing tests:** `upgrades_http`, `keeps_https`, `skips_localhost_and_10_x`, `skips_allowed_host`.
-- [ ] **Step 2: Run, FAIL. Step 3: Implement.**
-- [ ] **Step 4: Wire `on_navigation`:** if `upgrade` returns Some → cancel and navigate to https; on load failure of an upgraded URL → `rb://insecure` with "Continue on insecure connection" (adds host to allowed list for this session).
-- [ ] **Step 5: Verify** tests; manual `http://neverssl.com` → insecure page → continue works.
-- [ ] **Step 6: Commit** `feat: https-only mode`
+- [x] **Step 1: Failing tests:** `upgrades_http`, `keeps_https`, `skips_localhost_and_10_x`, `skips_allowed_host`.
+- [x] **Step 2: Run, FAIL. Step 3: Implement.**
+- [x] **Step 4: Wire `on_navigation`:** if `upgrade` returns Some → cancel and navigate to https; on load failure of an upgraded URL → `rb://insecure` with "Continue on insecure connection" (adds host to allowed list for this session).
+- [x] **Step 5: Verify** tests; manual `http://neverssl.com` → insecure page → continue works.
+- [x] **Step 6: Commit** `feat: https-only mode`
 
 ---
 

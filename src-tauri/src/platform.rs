@@ -137,17 +137,56 @@ type LoadFailed = Box<dyn Fn(usize, String, String, i64, String) + Send + Sync>;
 #[cfg(target_os = "macos")]
 static LOAD_FAILED: std::sync::OnceLock<LoadFailed> = std::sync::OnceLock::new();
 
-/// Call `f` whenever a page fails to load (takes effect once `hook_load_failed` succeeds).
+/// Call `f` whenever a page fails to load (takes effect once `hook_delegate` succeeds).
 #[cfg(target_os = "macos")]
 pub fn on_load_failed(f: impl Fn(usize, String, String, i64, String) + Send + Sync + 'static) {
     let _ = LOAD_FAILED.set(Box::new(f));
 }
 
-/// Teach wry's navigation delegate class the two "failed" callbacks. Call before creating each tab webview:
+/// Called for every main-frame navigation; returns a URL to load instead (https upgrade or an rb:// page).
+#[cfg(target_os = "macos")]
+type Redirect = Box<dyn Fn(String) -> Option<String> + Send + Sync>;
+#[cfg(target_os = "macos")]
+static REDIRECT: std::sync::OnceLock<Redirect> = std::sync::OnceLock::new();
+#[cfg(target_os = "macos")]
+static WRY_POLICY: std::sync::OnceLock<objc2::runtime::Imp> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "macos")]
+pub fn on_main_navigation(f: impl Fn(String) -> Option<String> + Send + Sync + 'static) {
+    let _ = REDIRECT.set(Box::new(f));
+}
+
+/// Our webView:decidePolicyForNavigationAction:decisionHandler: — wry's own handler sees every frame, so the
+/// https upgrade lives here where we can tell a top-level page from an iframe; everything else goes to wry's.
+#[cfg(target_os = "macos")]
+unsafe extern "C-unwind" fn decide_policy(this: *mut objc2::runtime::AnyObject, cmd: objc2::runtime::Sel, wv: *mut objc2::runtime::AnyObject,
+                                          action: *mut objc2::runtime::AnyObject, handler: *mut block2::Block<dyn Fn(isize)>) {
+    use objc2::{msg_send, runtime::{AnyObject, Bool}};
+    use objc2_foundation::{NSString, NSURL, NSURLRequest};
+    let instead = unsafe {
+        let frame: *mut AnyObject = msg_send![action, targetFrame];
+        let main = !frame.is_null() && { let m: Bool = msg_send![frame, isMainFrame]; m.as_bool() };
+        let req: *mut NSURLRequest = msg_send![action, request];
+        let url = req.as_ref().and_then(|r| r.URL()).and_then(|u| u.absoluteString()).map(|s| s.to_string());
+        match (main, url, REDIRECT.get()) { (true, Some(u), Some(f)) => f(u), _ => None }
+    };
+    if let Some(to) = instead.and_then(|t| NSURL::URLWithString(&NSString::from_str(&t))) {
+        unsafe {
+            (*handler).call((0,)); // WKNavigationActionPolicyCancel
+            let _: *mut AnyObject = msg_send![wv, loadRequest: &*NSURLRequest::requestWithURL(&to)];
+        }
+        return;
+    }
+    let Some(orig) = WRY_POLICY.get() else { unsafe { (*handler).call((1,)) }; return }; // Allow
+    let orig: unsafe extern "C-unwind" fn(*mut AnyObject, objc2::runtime::Sel, *mut AnyObject, *mut AnyObject, *mut block2::Block<dyn Fn(isize)>) = unsafe { std::mem::transmute(*orig) };
+    unsafe { orig(this, cmd, wv, action, handler) }
+}
+
+/// Teach wry's navigation delegate class the two "failed" callbacks and wrap its navigation policy. Call before creating each tab webview:
 /// the class only exists once wry has made its first webview, and WebKit checks the delegate's methods when
 /// it's attached, so this must run before the tab is created. Does the work once.
 #[cfg(target_os = "macos")]
-pub fn hook_load_failed() {
+pub fn hook_delegate() {
     use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
     use objc2::{msg_send, sel};
     use objc2_foundation::{NSError, NSString};
@@ -174,8 +213,16 @@ pub fn hook_load_failed() {
     };
     DONE.store(true, std::sync::atomic::Ordering::Relaxed);
     let imp: Imp = unsafe { std::mem::transmute(failed as unsafe extern "C-unwind" fn(_, _, _, _, _)) };
+    let cls_mut = cls as *const AnyClass as *mut AnyClass;
     for s in [sel!(webView:didFailProvisionalNavigation:withError:), sel!(webView:didFailNavigation:withError:)] {
-        unsafe { objc2::ffi::class_addMethod(cls as *const AnyClass as *mut AnyClass, s, imp, c"v@:@@@".as_ptr()) };
+        unsafe { objc2::ffi::class_addMethod(cls_mut, s, imp, c"v@:@@@".as_ptr()) };
+    }
+    unsafe {
+        let m = objc2::ffi::class_getInstanceMethod(cls_mut, sel!(webView:decidePolicyForNavigationAction:decisionHandler:));
+        if !m.is_null() {
+            let ours: Imp = std::mem::transmute(decide_policy as unsafe extern "C-unwind" fn(_, _, _, _, _));
+            if let Some(old) = objc2::ffi::method_setImplementation(m as *mut _, ours) { let _ = WRY_POLICY.set(old); }
+        }
     }
 }
 
@@ -194,6 +241,9 @@ pub fn show_html(wv: &tauri::Webview, html: String, url: String) {
 #[cfg(not(target_os = "macos"))]
 pub fn on_load_failed(_: impl Fn(usize, String, String, i64, String) + Send + Sync + 'static) {}
 #[cfg(not(target_os = "macos"))]
-pub fn hook_load_failed() {}
+pub fn hook_delegate() {}
+// ponytail: HTTPS upgrade on WebView2/WebKitGTK comes with their Task 14 glue (WebView2 NavigationStarting).
+#[cfg(not(target_os = "macos"))]
+pub fn on_main_navigation(_: impl Fn(String) -> Option<String> + Send + Sync + 'static) {}
 #[cfg(not(target_os = "macos"))]
 pub fn show_html(_: &tauri::Webview, _: String, _: String) {}

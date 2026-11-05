@@ -26,7 +26,7 @@ adblock = { version = "0.13", default-features = false, features = ["embedded-do
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSError", "NSArray", "NSURL"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSError", "NSArray", "NSURL", "NSURLRequest"] }
 objc2-local-authentication = { version = "0.3", features = ["LAContext", "block2"] }
 block2 = "0.6"
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "WKContentRuleList", "WKContentRuleListStore", "WKUserContentController"] }

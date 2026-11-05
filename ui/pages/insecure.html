@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Not secure</title>
+  <link rel="stylesheet" href="page.css">
+  <style>
+    body { max-width: 620px; padding-top: 14vh; }
+    .mark { width: 44px; height: 44px; color: var(--amber); margin-bottom: 20px; }
+    h1 { margin-bottom: 12px; }
+    p { color: #b9c6da; margin-bottom: 24px; font-size: 15px; }
+    b { color: var(--ice); }
+    .btns { display: flex; gap: 10px; flex-wrap: wrap; }
+    button { height: 36px; padding: 0 20px; border-radius: 18px; border: 0; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+    #back { background: var(--signal); color: #04101f; }
+    #go { background: none; color: #9fbbd9; border: 1px solid var(--line); }
+    #go:hover { color: var(--amber); border-color: var(--amber); }
+  </style>
+</head>
+<body>
+  <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M12 8v4M12 16h.01"/></svg>
+  <h1>This site has no secure version</h1>
+  <p id="why"></p>
+  <div class="btns">
+    <button id="back">Go back</button>
+    <button id="go" hidden>Continue on insecure connection</button>
+  </div>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const url = new URLSearchParams(location.search).get("url") || "";
+    let host = "";
+    try { const u = new URL(url); if (u.protocol === "http:") host = u.hostname; } catch {}
+    const why = document.getElementById("why");
+    if (host) {
+      const b = document.createElement("b"); b.textContent = host;
+      why.append("R-Browser tried a secure (https) connection to ", b,
+        " but the site doesn't offer one. If you continue, anyone on your network can see and change what you send and receive. Don't type passwords or card details.");
+      document.getElementById("go").hidden = false;
+    } else {
+      why.textContent = "The site doesn't offer a secure (https) connection.";
+    }
+    document.getElementById("back").onclick = () => history.length > 1 ? history.back() : (location.href = "newtab.html");
+    document.getElementById("go").onclick = () => invoke("insecure_continue", { url });
+  </script>
+</body>
+</html>

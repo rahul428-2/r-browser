@@ -45,6 +45,11 @@ struct Runtime {
     engine: Mutex<HashMap<usize, String>>,
     /// Tabs showing a "can't open this site" page: label -> the URL that failed (Reload retries it).
     failed: Mutex<HashMap<String, String>>,
+    /// HTTPS-only: hosts we just switched to https -> (the http URL asked for, when), to spot an https attempt
+    /// that fails or redirects back to http.
+    upgraded: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    /// Hosts the user chose to open over plain http, this session only.
+    insecure_ok: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Password vault runtime state. Plaintext only exists inside `with_vault`.
@@ -278,7 +283,7 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
 
 fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Result<Webview> {
     let w = app.get_window(win).ok_or(tauri::Error::WindowNotFound)?;
-    platform::hook_load_failed();
+    platform::hook_delegate();
     let (width, h) = content_area(&w);
     let (a1, a2, a3, a4) = (app.clone(), app.clone(), app.clone(), app.clone());
     let me = label(win, id);
@@ -303,6 +308,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
                 t.title.clone()
             })).unwrap_or_default();
             if p.event() == PageLoadEvent::Finished {
+                if let Some(h) = p.url().host_str() { a1.state::<Runtime>().upgraded.lock().unwrap().remove(h); }
                 a1.state::<Runtime>().committed.lock().unwrap().insert(wv.label().to_string(), url.clone());
             }
             if p.event() == PageLoadEvent::Finished && !is_incognito(&win) && !failed {
@@ -343,6 +349,45 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
 
 // ---- sites that can't be opened ----
 
+/// Full address of an app page (`rb://name?query`): same origin as the toolbar UI.
+fn page_url(app: &AppHandle, rb: &str) -> Option<Url> {
+    let page = rb_page(rb)?;
+    let base = app.webviews().into_values().find(|w| w.label().ends_with("-ui"))?.url().ok()?;
+    base.join(&format!("/{page}")).ok()
+}
+
+/// HTTPS-only, for every top-level navigation: try http:// sites over https first. If the https attempt
+/// comes straight back to http (the site redirects to http), stop and show the "no secure version" page.
+fn on_main_navigation(app: &AppHandle, url: &str) -> Option<String> {
+    let rt = app.state::<Runtime>();
+    let to = core::https::upgrade(url, &rt.insecure_ok.lock().unwrap())?;
+    let host = Url::parse(url).ok()?.host_str()?.to_string();
+    let mut up = rt.upgraded.lock().unwrap();
+    if up.get(&host).is_some_and(|(_, at)| at.elapsed().as_secs() < 15) {
+        up.remove(&host);
+        return page_url(app, &core::https::insecure_page(url)).map(String::from);
+    }
+    up.insert(host, (url.to_string(), std::time::Instant::now()));
+    Some(to)
+}
+
+/// The http URL to offer, if `url` is an https attempt we made that just failed for a reason http might not share.
+fn failed_upgrade(app: &AppHandle, url: &str, domain: &str, code: i64) -> Option<String> {
+    let host = Url::parse(url).ok().filter(|u| u.scheme() == "https")?.host_str()?.to_string();
+    let (http, at) = app.state::<Runtime>().upgraded.lock().unwrap().remove(&host)?;
+    // No such host / offline: http won't work either, so show the normal reason.
+    let hopeless = domain == "NSURLErrorDomain" && matches!(code, -1003 | -1009);
+    (at.elapsed().as_secs() < 60 && !hopeless).then_some(http)
+}
+
+#[tauri::command]
+async fn insecure_continue(webview: Webview, app: AppHandle, url: String) -> Res { trusted(&webview)?;
+    let u = Url::parse(&url).map_err(err)?;
+    let host = u.host_str().filter(|_| u.scheme() == "http").ok_or("not an http address")?;
+    app.state::<Runtime>().insecure_ok.lock().unwrap().insert(host.to_string());
+    webview.navigate(u).map_err(err)
+}
+
 /// A tab's page failed to load: show why, in the tab, instead of a blank page.
 fn on_load_failed(app: &AppHandle, engine: usize, url: String, domain: String, code: i64, desc: String) {
     let Some(label) = app.state::<Runtime>().engine.lock().unwrap().get(&engine).cloned() else { return };
@@ -350,6 +395,10 @@ fn on_load_failed(app: &AppHandle, engine: usize, url: String, domain: String, c
         parse_label(app, &label).and_then(|(w, id)| with(app, &w, |l| l.get(id).map(|t| t.url.clone()))).unwrap_or_default()
     } else { url };
     if !url.starts_with("http") { return; }
+    if let Some(http) = failed_upgrade(app, &url, &domain, code) {
+        if let (Some(wv), Some(page)) = (app.get_webview(&label), page_url(app, &core::https::insecure_page(&http))) { let _ = wv.navigate(page); }
+        return;
+    }
     let (Some(wv), Some(html)) = (app.get_webview(&label), core::errors::error_page(&url, &domain, code, &desc)) else { return };
     app.state::<Runtime>().failed.lock().unwrap().insert(label, url.clone());
     platform::show_html(&wv, html, url);
@@ -696,8 +745,7 @@ async fn navigate(webview: Webview, app: AppHandle, window: Window, id: TabId, i
     let wv = tab_webview(&app, win, id)?;
     let dest = match target(&url) {
         WebviewUrl::External(u) => u,
-        // app page: same origin as the UI, resolve against it
-        WebviewUrl::App(p) => app.get_webview(&ui_label(win)).and_then(|ui| ui.url().ok()).and_then(|b| b.join(&format!("/{}", p.display())).ok()).ok_or("bad page")?,
+        WebviewUrl::App(_) => page_url(&app, &url).ok_or("bad page")?,
         _ => return Err("bad url".into()),
     };
     wv.navigate(dest).map_err(err)?;
@@ -1144,7 +1192,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
-        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default() })
+        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
@@ -1158,6 +1206,8 @@ pub fn run() {
             start_blocker(&handle);
             let h = handle.clone();
             platform::on_load_failed(move |e, url, domain, code, desc| on_load_failed(&h, e, url, domain, code, desc));
+            let h = handle.clone();
+            platform::on_main_navigation(move |url| on_main_navigation(&h, &url));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1166,7 +1216,7 @@ pub fn run() {
             downloads_list, show_download,
             tab_menu, group_menu, group_toggle, group_rename, move_tab, tear_start, tear_move, tear_end, attach_tab,
             page_event, password_save, password_never, password_dismiss, password_menu,
-            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss
+            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss, insecure_continue
         ])
         .run(tauri::generate_context!())
         .expect("error while running R-Browser");

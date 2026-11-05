@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-insecure-continue"
+description = "Enables the insecure_continue command without any pre-configured scope."
+commands.allow = ["insecure_continue"]
+
+[[permission]]
+identifier = "deny-insecure-continue"
+description = "Denies the insecure_continue command without any pre-configured scope."
+commands.deny = ["insecure_continue"]
