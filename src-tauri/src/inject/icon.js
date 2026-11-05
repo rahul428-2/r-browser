@@ -18,8 +18,11 @@
     sent = best;
     try { window.__TAURI_INTERNALS__.invoke("page_event", { ev: { kind: "icon", url: best } }); } catch {}
   };
-  document.addEventListener("DOMContentLoaded", () => {
-    pick();
-    new MutationObserver(pick).observe(document.head || document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["href"] });
+  // The browser only accepts this once the page has finished loading, so report after load, then on changes.
+  let timer;
+  const soon = () => { clearTimeout(timer); timer = setTimeout(pick, 400); };
+  addEventListener("load", () => {
+    soon();
+    new MutationObserver(soon).observe(document.head || document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["href"] });
   });
 })();

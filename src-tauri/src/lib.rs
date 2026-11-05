@@ -223,7 +223,7 @@ fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::R
     let w = builder.build()?;
     app.state::<Browser>().inner().0.lock().unwrap().insert(win.to_string(), TabList::default());
     let (width, _) = content_area(&w);
-    w.add_child(
+    let ui = w.add_child(
         // Incognito windows: the toolbar itself is non-persistent too (it may load favicons).
         {
             let b = WebviewBuilder::new(ui_label(win), WebviewUrl::App("index.html".into())).incognito(is_incognito(win));
@@ -234,6 +234,8 @@ fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::R
         LogicalPosition::new(0.0, 0.0),
         LogicalSize::new(width, BAR),
     )?;
+    // The toolbar loads site icons, so it gets the ad/tracker block list too (no-op until the list is loaded).
+    platform::set_blocking(&ui, true);
     let (app2, win2) = (app.clone(), win.to_string());
     w.on_window_event(move |e| match e {
         WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => layout(&app2, &win2),
@@ -500,7 +502,9 @@ fn start_blocker(app: &AppHandle) {
     let id = format!("rb-{:016x}", h.finish());
     let a = app.clone();
     platform::load_rules(app.clone(), id, move || blocker::Blocker::from_lists(&lists).webkit_rules_json(), move || {
-        for wv in a.webviews().into_values().filter(|w| is_tab_label(w.label())) {
+        for wv in a.webviews().into_values() {
+            if wv.label().ends_with("-ui") { platform::set_blocking(&wv, true); continue; } // it loads site icons
+            if !is_tab_label(wv.label()) { continue; }
             let url = wv.url().map(|u| u.to_string()).unwrap_or_default();
             sync_blocking(&a, &wv, &url);
         }
@@ -1061,10 +1065,14 @@ async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
     }
     if is_incognito(&win) { return Ok(()); } // incognito tabs show no site icons (no fetches that outlive the window)
     if ev.kind == "icon" {
-        if core::tabs::valid_icon(&ev.url) {
-            with(&app, &win, |l| if let Some(t) = l.get_mut(id) { t.icon = ev.url; });
-            emit(&app, &win);
-        }
+        // Only from a finished page that is the site the tab is on: while a tab is loading, the page being left
+        // can still send events, and its icon must not end up on the next site's tab.
+        let changed = core::tabs::valid_icon(&ev.url) && with(&app, &win, |l| l.get_mut(id).is_some_and(|t| {
+            let ok = !t.loading && origin_of(&t.url).is_some() && origin_of(&t.url) == origin_of(&page) && t.icon != ev.url;
+            if ok { t.icon = ev.url.clone(); }
+            ok
+        }));
+        if changed { emit(&app, &win); }
         return Ok(());
     }
     let Some(origin) = origin_of(&page) else { return Ok(()) };
