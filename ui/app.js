@@ -182,6 +182,8 @@ function renderBar() {
   $("key").hidden = incognito || !(cur && cur.login_form);
   $("star").classList.toggle("on", !!state.bookmarked);
   $("unv").hidden = !state.unverified;
+  // The styled address overlays the input: keep it where the input starts (the badge pushes it right).
+  $("pretty").style.left = $("url").offsetLeft + "px";
   $("star").title = state.bookmarked ? "Remove bookmark (Ctrl/⌘+D)" : "Bookmark this page (Ctrl/⌘+D)";
   if (document.activeElement !== $("url")) {
     $("url").value = url;

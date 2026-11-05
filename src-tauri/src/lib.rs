@@ -437,7 +437,7 @@ fn trust_of(app: &AppHandle, url: &str) -> core::trust::Trust { app.state::<Trus
 async fn trust_menu(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
     let win = window.label().to_string();
     let Some((id, url)) = with(&app, &win, |l| l.active.and_then(|a| l.get(a).map(|t| (a, t.url.clone())))) else { return Ok(()) };
-    let Some(domain) = Url::parse(&url).ok().and_then(|u| u.host_str().and_then(core::trust::registrable)) else { return Ok(()) };
+    let Some(domain) = core::trust::site_of(&url) else { return Ok(()) };
     let info = |text: &str| MenuItemBuilder::new(text).enabled(false).build(&app);
     let trust = if is_incognito(&win) { format!("Trust {domain} (not in incognito)") } else { format!("Trust {domain}") };
     let menu = tauri::menu::MenuBuilder::new(&app)
@@ -445,14 +445,16 @@ async fn trust_menu(webview: Webview, app: AppHandle, window: Window) -> Res { t
         .item(&info("It isn't one of the 10,000 most-visited sites and you haven't trusted it.").map_err(err)?)
         .item(&info("New and lookalike sites are where most scams live: check the address before signing in.").map_err(err)?)
         .separator()
-        .item(&MenuItemBuilder::with_id(format!("tr|{win}|trust|{id}"), trust).enabled(!is_incognito(&win)).build(&app).map_err(err)?)
+        // The domain shown is in the id: if the tab moves to another site before the click, nothing is trusted.
+        .item(&MenuItemBuilder::with_id(format!("tr|{win}|trust|{id}|{domain}"), trust).enabled(!is_incognito(&win)).build(&app).map_err(err)?)
         .build().map_err(err)?;
     window.popup_menu(&menu).map_err(err)
 }
 
-fn trust_site(app: &AppHandle, win: &str, id: TabId) -> Res {
+fn trust_site(app: &AppHandle, win: &str, id: TabId, shown: &str) -> Res {
     if is_incognito(win) { return Ok(()); }
     let url = with(app, win, |l| l.get(id).map(|t| t.url.clone())).ok_or("no such tab")?;
+    if core::trust::site_of(&url).as_deref() != Some(shown) { return Ok(()); }
     let Some(d) = app.state::<Trusted>().0.lock().unwrap().trust(&url) else { return Ok(()) };
     lib(app, |l| if !l.trusted.contains(&d) { l.trusted.push(d) });
     save_library_soon(app);
@@ -967,7 +969,7 @@ fn on_popup(app: &AppHandle, id: &str) -> Res {
     let num = |i: usize| p.get(i).and_then(|x| x.parse::<u64>().ok()).ok_or("bad menu id");
     match (kind, p.get(2).copied().unwrap_or_default()) {
         ("b", "toggle") => toggle_blocking(app, win, num(3)?)?,
-        ("tr", "trust") => trust_site(app, win, num(3)?)?,
+        ("tr", "trust") => trust_site(app, win, num(3)?, p.get(4).copied().unwrap_or_default())?,
         ("pw", _) => return fill_password(app, win, num(2)?, id.splitn(4, '|').nth(3).unwrap_or_default()),
         ("t", "new") => {
             let g = with(app, win, |l| l.new_group(num(3).unwrap_or(0)));

@@ -18,18 +18,33 @@ pub fn registrable(host: &str) -> Option<String> {
     psl::domain_str(&host.to_ascii_lowercase()).map(String::from)
 }
 
+/// What a site is trusted under: the exact address for an IP, the registrable domain for a name. A `blob:`
+/// URL counts as the site that made it. None for anything that isn't a web page.
+pub fn site_of(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    if u.scheme() == "blob" { return site_of(u.path()); }
+    if !matches!(u.scheme(), "http" | "https") { return None; }
+    match u.host()? {
+        url::Host::Domain(d) => registrable(d),
+        ip => Some(ip.to_string()),
+    }
+}
+
 impl TrustDb {
     /// `top`: one domain per line (the bundled Tranco list). `user`: domains the user trusted.
     pub fn new(top: &str, user: impl IntoIterator<Item = String>) -> TrustDb {
         TrustDb { top: top.lines().map(|l| l.trim().to_ascii_lowercase()).filter(|l| !l.is_empty()).collect(), user: user.into_iter().collect() }
     }
 
+    /// Fails closed: only the new tab, the browser's own pages and known web sites are Verified; data:, file:,
+    /// unknown schemes and anything unparsable are Unverified.
     pub fn classify(&self, url: &str) -> Trust {
-        let Ok(u) = url::Url::parse(url) else { return Trust::Verified }; // new tab, nothing loaded
-        if !matches!(u.scheme(), "http" | "https") { return Trust::Verified; } // rb://, about:, the app's own pages
-        let Some(host) = u.host() else { return Trust::Unverified };
-        if crate::core::https::local(&host) { return Trust::Verified; }
-        match registrable(&host.to_string()) {
+        if url.is_empty() || url == "about:blank" || url.starts_with("rb://") || crate::core::tabs::is_app_page(url) { return Trust::Verified; }
+        let Ok(u) = url::Url::parse(url) else { return Trust::Unverified };
+        if u.scheme() == "blob" { return self.classify(u.path()); }
+        if !matches!(u.scheme(), "http" | "https") { return Trust::Unverified; }
+        if u.host().is_some_and(|h| crate::core::https::local(&h)) { return Trust::Verified; }
+        match site_of(url) {
             Some(d) if self.top.contains(&d) || self.user.contains(&d) => Trust::Verified,
             _ => Trust::Unverified,
         }
@@ -37,7 +52,7 @@ impl TrustDb {
 
     /// Trust `url`'s site from now on; returns the domain that was added.
     pub fn trust(&mut self, url: &str) -> Option<String> {
-        let d = registrable(url::Url::parse(url).ok()?.host_str()?)?;
+        let d = site_of(url)?;
         self.user.insert(d.clone());
         Some(d)
     }
@@ -90,5 +105,27 @@ mod tests {
         let mut d = db();
         assert_eq!(d.trust("https://www.some-small-blog.net/a").as_deref(), Some("some-small-blog.net"));
         assert_eq!(d.classify("https://cdn.some-small-blog.net/"), Trust::Verified);
+    }
+
+    #[test]
+    fn trusting_an_ip_trusts_only_that_ip() {
+        let mut d = db();
+        assert_eq!(d.trust("http://203.0.113.7/admin").as_deref(), Some("203.0.113.7"));
+        assert_eq!(d.classify("http://203.0.113.7/x"), Trust::Verified);
+        assert_eq!(d.classify("http://198.51.113.7/"), Trust::Unverified);
+        assert_eq!(d.classify("http://10.113.7.1/"), Trust::Verified); // private network, always fine
+    }
+
+    #[test]
+    fn unknown_schemes_fail_closed() {
+        for u in ["data:text/html,<h1>Sign in to Google</h1>", "file:///Users/x/Downloads/invoice.html", "javascript:alert(1)", "ftp://x.com/", "not a url"] {
+            assert_eq!(db().classify(u), Trust::Unverified, "{u}");
+        }
+    }
+
+    #[test]
+    fn blob_url_uses_its_real_site() {
+        assert_eq!(db().classify("blob:https://evil-login.net/1b2c"), Trust::Unverified);
+        assert_eq!(db().classify("blob:https://mail.google.com/1b2c"), Trust::Verified);
     }
 }
