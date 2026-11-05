@@ -225,7 +225,12 @@ fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::R
     let (width, _) = content_area(&w);
     w.add_child(
         // Incognito windows: the toolbar itself is non-persistent too (it may load favicons).
-        WebviewBuilder::new(ui_label(win), WebviewUrl::App("index.html".into())).incognito(is_incognito(win)),
+        {
+            let b = WebviewBuilder::new(ui_label(win), WebviewUrl::App("index.html".into())).incognito(is_incognito(win));
+            #[cfg(target_os = "macos")]
+            let b = b.user_agent(user_agent());
+            b
+        },
         LogicalPosition::new(0.0, 0.0),
         LogicalSize::new(width, BAR),
     )?;
@@ -288,6 +293,14 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
     true
 }
 
+/// Identify as Safari (Rahul's call, 5 Nov): Gmail rejects the engine's bare user agent. Used by tabs and the
+/// toolbar alike (it fetches favicons), so a site never sees two different identities.
+#[cfg(target_os = "macos")]
+fn user_agent() -> &'static str {
+    static UA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    UA.get_or_init(|| core::tabs::safari_ua(&std::fs::read_to_string("/Applications/Safari.app/Contents/Info.plist").unwrap_or_default()))
+}
+
 fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Result<Webview> {
     let w = app.get_window(win).ok_or(tauri::Error::WindowNotFound)?;
     platform::hook_delegate();
@@ -341,6 +354,8 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             }
             tauri::webview::NewWindowResponse::Deny
         });
+    #[cfg(target_os = "macos")]
+    { builder = builder.user_agent(user_agent()); }
     builder = builder.initialization_script(include_str!("inject/dark.js"))
         .initialization_script(include_str!("inject/popup.js"));
     if !is_incognito(win) { builder = builder.initialization_script(include_str!("inject/login.js")); }

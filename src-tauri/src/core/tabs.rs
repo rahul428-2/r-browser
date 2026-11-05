@@ -65,6 +65,16 @@ pub fn to_rb(url: &str) -> String {
     }
 }
 
+/// The user agent Safari on this Mac sends (same WebKit engine). The engine's bare default names no browser,
+/// so Gmail and others refuse it as "unsupported". `info_plist` is Safari's Info.plist; falls back to 26.0.
+pub fn safari_ua(info_plist: &str) -> String {
+    let v = info_plist.split("<key>CFBundleShortVersionString</key>").nth(1)
+        .and_then(|r| r.split("<string>").nth(1)?.split("</string>").next())
+        .map(str::trim).filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .unwrap_or("26.0");
+    format!("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{v} Safari/605.1.15")
+}
+
 /// WKNavigationType values a website can't fake into an app page: going back/forward, or reloading one.
 pub const NAV_BACK_FORWARD: isize = 2;
 pub const NAV_RELOAD: isize = 3;
@@ -370,5 +380,12 @@ mod tests {
         assert!(app_nav_allowed("tauri://localhost/pages/insecure.html?url=x", 0, false)); // "Go back" to the new tab page
         assert!(app_nav_allowed("https://news.com/", NAV_BACK_FORWARD, false));
         assert!(app_nav_allowed("https://news.com/", NAV_RELOAD, false));
+    }
+
+    #[test]
+    fn safari_ua_uses_installed_version() {
+        let plist = "<key>CFBundleShortVersionString</key>\n\t<string>27.0.1</string>";
+        assert_eq!(safari_ua(plist), "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15");
+        assert!(safari_ua("garbage").contains("Version/26.0 Safari/605.1.15"));
     }
 }
