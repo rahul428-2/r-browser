@@ -378,6 +378,13 @@ me.listen("popup-blocked", (e) => {
 $("popallow").onclick = () => { hidePop(); invoke("popup_allow").catch(() => {}); };
 $("popx").onclick = () => { hidePop(); invoke("popup_dismiss"); };
 
+// ---- update downloaded and verified: offer a restart (stays until clicked) ----
+me.listen("update-ready", (e) => {
+  $("upd").querySelector("span").textContent = `Update ${e.payload} ready`;
+  $("upd").hidden = false;
+});
+$("updgo").onclick = () => invoke("update_restart").catch(() => {});
+
 // ---- suggestions from bookmarks + history (native datalist popup) ----
 let sugTimer;
 url.addEventListener("input", () => {

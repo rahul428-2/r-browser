@@ -3,6 +3,7 @@ fn main() {
     // the toolbar and rb:// pages get the app commands, websites get only `page_event`.
     let commands = &[
         "ui_ready",
+        "update_restart",
         "new_tab",
         "new_incognito_window",
         "close_tab",

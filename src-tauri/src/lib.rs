@@ -711,6 +711,73 @@ fn start_freezer(app: &AppHandle) {
     });
 }
 
+// ---- auto-update (signed builds from GitHub Releases; see tauri.conf.json plugins.updater) ----
+
+/// A downloaded, signature-checked update waiting for "Restart to update".
+struct UpdateReady(Mutex<Option<(tauri_plugin_updater::Update, Vec<u8>)>>);
+
+fn update_pill(app: &AppHandle, ui: &str) {
+    let v = app.state::<UpdateReady>().0.lock().unwrap().as_ref().map(|(u, _)| u.version.clone());
+    if let Some(v) = v { let _ = app.emit_to(ui, "update-ready", v); }
+}
+
+/// Check, download and verify in the background; the toolbar then shows the pill. `manual` = from the menu:
+/// also say "up to date" or what went wrong.
+async fn check_update(app: AppHandle, manual: bool) {
+    use tauri_plugin_updater::UpdaterExt;
+    let say = |msg: String| { app.dialog().message(msg).title("R-Browser updates").blocking_show(); };
+    if app.state::<UpdateReady>().0.lock().unwrap().is_some() {
+        if manual { ask_restart(&app); }
+        return;
+    }
+    let found = match app.updater() { Ok(u) => u.check().await, Err(e) => Err(e) };
+    let r = match found {
+        Ok(Some(u)) => match u.download(|_, _| {}, || {}).await.and_then(|b| u.verify(&b).map(|_| b)) {
+            Ok(bytes) => {
+                *app.state::<UpdateReady>().0.lock().unwrap() = Some((u, bytes));
+                for ui in app.webviews().into_keys().filter(|l| l.ends_with("-ui")) { update_pill(&app, &ui); }
+                if manual { ask_restart(&app); }
+                return;
+            }
+            Err(e) => format!("The update couldn't be downloaded: {e}"),
+        },
+        Ok(None) => format!("R-Browser {} is up to date.", app.package_info().version),
+        Err(e) => format!("Couldn't check for updates: {e}"),
+    };
+    if manual { say(r); } else { eprintln!("update: {r}"); }
+}
+
+fn ask_restart(app: &AppHandle) {
+    let v = app.state::<UpdateReady>().0.lock().unwrap().as_ref().map(|(u, _)| u.version.clone()).unwrap_or_default();
+    let yes = app.dialog().message(format!("R-Browser {v} is ready. Restart now? Your tabs come back."))
+        .title("Update ready").buttons(MessageDialogButtons::OkCancelCustom("Restart".into(), "Later".into())).blocking_show();
+    if yes { let _ = install_update(app); }
+}
+
+fn install_update(app: &AppHandle) -> Res {
+    let Some((u, bytes)) = app.state::<UpdateReady>().0.lock().unwrap().take() else { return Ok(()) };
+    save_session_now(app);
+    u.install(&bytes).map_err(err)?; // checks the signature again before replacing the app
+    app.restart()
+}
+
+#[tauri::command]
+async fn update_restart(webview: Webview, app: AppHandle) -> Res { trusted(&webview)?;
+    install_update(&app).inspect_err(|e| { app.dialog().message(format!("The update couldn't be installed: {e}")).title("R-Browser updates").blocking_show(); })
+}
+
+/// 10 s after launch, then daily.
+fn start_updater(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        loop {
+            tauri::async_runtime::block_on(check_update(app.clone(), false));
+            std::thread::sleep(std::time::Duration::from_secs(24 * 3600));
+        }
+    });
+}
+
 fn close(app: &AppHandle, win: &str, id: TabId) -> Res {
     if let Some(wv) = app.get_webview(&label(win, id)) { let _ = wv.close(); }
     let rt = app.state::<Runtime>();
@@ -922,6 +989,7 @@ async fn ui_ready(webview: Webview, app: AppHandle, window: Window) -> Res { tru
     if tab_ids(&app, &win).is_empty() { open_tab(&app, &win, "")?; }
     layout(&app, &win);
     emit(&app, &win);
+    update_pill(&app, &ui_label(&win));
     Ok(())
 }
 
@@ -1377,6 +1445,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("history", "History", "CmdOrCtrl+Y")?)
         .item(&item("downloads", "Downloads", "CmdOrCtrl+Shift+J")?)
         .item(&item("passwords", "Passwords", "CmdOrCtrl+Alt+P")?)
+        .separator()
+        .item(&MenuItemBuilder::with_id("check-update", "Check for Updates…").build(app)?)
         .build()?;
     let menu = Menu::default(app)?;
     menu.append(&tab_menu)?;
@@ -1400,6 +1470,7 @@ fn on_menu(app: &AppHandle, id: &str) {
                 r
             }
             ("new-incognito", _) => new_incognito(&app),
+            ("check-update", _) => { check_update(app.clone(), true).await; Ok(()) }
             ("close-tab", Some(c)) => close(&app, &win, c),
             ("focus-url", _) => { focus_ui(&app, &win, "document.getElementById('url').focus()"); Ok(()) }
             ("find", _) => { focus_ui(&app, &win, "openFind()"); Ok(()) }
@@ -1431,6 +1502,8 @@ pub fn run() {
         .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default(), app_nav: Mutex::default(), user_nav: Mutex::default(), scroll_to: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(UpdateReady(Mutex::default()))
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
         .setup(|app| {
             let handle = app.handle().clone();
@@ -1448,6 +1521,7 @@ pub fn run() {
             create_window(&handle, MAIN, None)?;
             start_blocker(&handle);
             start_freezer(&handle);
+            start_updater(&handle);
             let h = handle.clone();
             platform::on_load_failed(move |e, url, domain, code, desc| on_load_failed(&h, e, url, domain, code, desc));
             let h = handle.clone();
@@ -1462,7 +1536,7 @@ pub fn run() {
             downloads_list, show_download,
             tab_menu, group_menu, group_toggle, group_rename, move_tab, tear_start, tear_move, tear_end, attach_tab,
             page_event, password_save, password_never, password_dismiss, password_menu,
-            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss, insecure_continue, trust_menu
+            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss, insecure_continue, trust_menu, update_restart
         ])
         .run(tauri::generate_context!())
         .expect("error while running R-Browser");
