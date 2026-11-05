@@ -50,6 +50,9 @@ impl TrustDb {
         }
     }
 
+    /// Treat `domain` (a `site_of` key) as verified from now on.
+    pub fn add(&mut self, domain: &str) { self.user.insert(domain.to_string()); }
+
     /// Trust `url`'s site from now on; returns the domain that was added.
     pub fn trust(&mut self, url: &str) -> Option<String> {
         let d = site_of(url)?;

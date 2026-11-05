@@ -157,6 +157,38 @@ pub fn on_main_navigation(f: impl Fn(String, String, isize) -> Option<String> + 
     let _ = REDIRECT.set(Box::new(f));
 }
 
+/// Whether a main-frame navigation should load locked down (Lockdown Mode: JIT off, risky web features off).
+#[cfg(target_os = "macos")]
+static LOCKDOWN: std::sync::OnceLock<Box<dyn Fn(String) -> bool + Send + Sync>> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "macos")]
+pub fn on_lockdown(f: impl Fn(String) -> bool + Send + Sync + 'static) {
+    let _ = LOCKDOWN.set(Box::new(f));
+}
+
+/// webView:decidePolicyForNavigationAction:preferences:decisionHandler: — once the delegate has this, WebKit calls
+/// it instead of the plain one. Sets Lockdown Mode for the page, then decides exactly as the plain one does.
+#[cfg(target_os = "macos")]
+unsafe extern "C-unwind" fn decide_policy_prefs(this: *mut objc2::runtime::AnyObject, _cmd: objc2::runtime::Sel, wv: *mut objc2::runtime::AnyObject,
+                                                action: *mut objc2::runtime::AnyObject, prefs: *mut objc2::runtime::AnyObject,
+                                                handler: *mut block2::Block<dyn Fn(isize, *mut objc2::runtime::AnyObject)>) {
+    use objc2::{msg_send, runtime::{AnyObject, Bool}, sel};
+    use objc2_foundation::NSURLRequest;
+    unsafe {
+        let frame: *mut AnyObject = msg_send![action, targetFrame];
+        let main = !frame.is_null() && { let m: Bool = msg_send![frame, isMainFrame]; m.as_bool() };
+        if main && !prefs.is_null() {
+            let req: *mut NSURLRequest = msg_send![action, request];
+            let url = req.as_ref().and_then(|r| r.URL()).and_then(|u| u.absoluteString()).map(|s| s.to_string()).unwrap_or_default();
+            let lock = LOCKDOWN.get().is_some_and(|f| f(url));
+            let _: () = msg_send![prefs, setLockdownModeEnabled: Bool::new(lock)];
+        }
+        // Hand the plain decision (cancel / allow / redirect) back to WebKit with these preferences.
+        let bridge = block2::RcBlock::new(move |policy: isize| (*handler).call((policy, prefs)));
+        decide_policy(this, sel!(webView:decidePolicyForNavigationAction:decisionHandler:), wv, action, &*bridge as *const _ as *mut _);
+    }
+}
+
 /// Our webView:decidePolicyForNavigationAction:decisionHandler: — wry's own handler sees every frame, so the
 /// https upgrade lives here where we can tell a top-level page from an iframe; everything else goes to wry's.
 #[cfg(target_os = "macos")]
@@ -231,6 +263,8 @@ pub fn hook_delegate() {
             let ours: Imp = std::mem::transmute(decide_policy as unsafe extern "C-unwind" fn(_, _, _, _, _));
             if let Some(old) = objc2::ffi::method_setImplementation(m as *mut _, ours) { let _ = WRY_POLICY.set(old); }
         }
+        let prefs: Imp = std::mem::transmute(decide_policy_prefs as unsafe extern "C-unwind" fn(_, _, _, _, _, _));
+        objc2::ffi::class_addMethod(cls_mut, sel!(webView:decidePolicyForNavigationAction:preferences:decisionHandler:), prefs, c"v@:@@@@".as_ptr());
     }
 }
 
@@ -251,6 +285,9 @@ pub fn on_load_failed(_: impl Fn(usize, String, String, i64, String) + Send + Sy
 #[cfg(not(target_os = "macos"))]
 pub fn hook_delegate() {}
 // ponytail: HTTPS upgrade on WebView2/WebKitGTK comes with their Task 14 glue (WebView2 NavigationStarting).
+// ponytail: WebView2 jitless environment / WebKitGTK JIT switch come with the Task 14 glue.
+#[cfg(not(target_os = "macos"))]
+pub fn on_lockdown(_: impl Fn(String) -> bool + Send + Sync + 'static) {}
 #[cfg(not(target_os = "macos"))]
 pub fn on_main_navigation(_: impl Fn(String, String, isize) -> Option<String> + Send + Sync + 'static) {}
 #[cfg(not(target_os = "macos"))]

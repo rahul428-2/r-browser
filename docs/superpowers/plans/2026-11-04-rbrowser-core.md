@@ -34,6 +34,7 @@
 - **HTTPS-only is macOS-only so far** (Task 5): wry's navigation hook sees every frame, so the upgrade wraps wry's `decidePolicyForNavigationAction` (main frame only) at runtime. WebView2 (`NavigationStarting`) / WebKitGTK → Task 14. `https::upgrade` takes the session allow-list as a parameter; explicit ports, private IPs and intranet names (no dot, .local, .lan, .internal, .home.arpa) are never upgraded. An https attempt that redirects straight back to http within 15 s counts as "no secure version". Only `rb://insecure` (not blocked/warning) exists yet — those belong to Tasks 6/10.
 - **Safe Browsing not built yet** (Task 6): it needs a Google Safe Browsing API key (free, non-commercial) to download hash prefixes and confirm hits; none exists, so `safebrowsing.rs`, the Malicious state and `rb://blocked` wait until Rahul creates one. Verified/unverified (top-10k + user trust) works without it.
 - **Trust UI is a native menu, not a popover** (Task 6): same pattern as the shield menu. "Trust this site" is disabled in incognito (it would be saved to disk). Top-list weekly refresh → Task 14 with the filter lists.
+- **Task 7 design changed by Rahul (5 Nov):** unverified sites load with Lockdown Mode (JIT, WebAssembly, WebGL, WebRTC, IndexedDB… off — see docs/notes/jit.md) and get a one-time safety check (core/check.rs: https, no IDN, not a lookalike of a top-10k site, not on Peter Lowe/NoCoin, no self-opened pop-ups or self-redirects to another site during the first 30 s). Pass → saved in `Library.checked`, treated as verified, never checked again; fail → stays locked this session. Incognito: locked, never checked. The checks cannot detect zero-days (told Rahul). No `hardened_mode` setting yet. Windows/Linux → Task 14.
 - **Incognito tabs are isolated from each other on macOS** (wry gives each incognito webview its own non-persistent store; Chrome shares one per incognito window). Stricter than Chrome; acceptable for v1.
 
 ## Review Focus
@@ -217,10 +218,10 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 
 **Interfaces:** `platform::set_hardened(webview: &Webview, on: bool)`; setting `hardened_mode: Auto | Always | Off` (Linux: `Always | Off` only).
 
-- [ ] **Step 1: Spike each engine (timebox 2 h each), record results in `docs/notes/jit.md`:** macOS `WKWebpagePreferences.lockdownModeEnabled` per navigation (what breaks: fonts, WebGL, wasm?); Windows second `CoreWebView2Environment` with `--js-flags=--jitless`; Linux `JSC_useJIT=0` env (process-wide?). Measure with a JS benchmark page that the JIT is actually off (≥3× slower loop).
-- [ ] **Step 2: Implement per findings:** Unverified tabs created in hardened mode; when a hardened tab navigates to a Verified site (or vice versa) recreate the webview in the right mode, keeping history-less URL. Linux: global toggle in settings.
-- [ ] **Step 3: Verify** benchmark page shows the slowdown only on unverified sites (mac/Windows); Gmail unaffected.
-- [ ] **Step 4: Commit** `feat: jit-off hardened mode for unverified sites`
+- [x] **Step 1: Spike each engine (timebox 2 h each), record results in `docs/notes/jit.md`:** macOS `WKWebpagePreferences.lockdownModeEnabled` per navigation (what breaks: fonts, WebGL, wasm?); Windows second `CoreWebView2Environment` with `--js-flags=--jitless`; Linux `JSC_useJIT=0` env (process-wide?). Measure with a JS benchmark page that the JIT is actually off (≥3× slower loop).
+- [x] **Step 2: Implement per findings:** Unverified tabs created in hardened mode; when a hardened tab navigates to a Verified site (or vice versa) recreate the webview in the right mode, keeping history-less URL. Linux: global toggle in settings.
+- [x] **Step 3: Verify** benchmark page shows the slowdown only on unverified sites (mac/Windows); Gmail unaffected.
+- [x] **Step 4: Commit** `feat: jit-off hardened mode for unverified sites`
 
 ---
 

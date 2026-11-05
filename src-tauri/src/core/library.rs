@@ -34,6 +34,9 @@ pub struct Library {
     /// Sites (registrable domains) the user marked "Trust this site".
     #[serde(default)]
     pub trusted: Vec<String>,
+    /// Sites that passed the one-time safety check (core::check): treated as verified, never checked again.
+    #[serde(default)]
+    pub checked: Vec<String>,
 }
 
 /// The site a per-site setting is keyed on: the host of an http(s) URL.

@@ -27,8 +27,16 @@ const ZOOM_STEPS: [f64; 9] = [0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0];
 struct Browser(Mutex<HashMap<String, TabList>>);
 /// Bookmarks, history, downloads (normal windows only).
 struct Lib(Mutex<Library>);
-/// Verified-site lists: bundled top sites + the user's trusted sites.
+/// Verified-site lists: bundled top sites + the user's trusted sites + sites that passed the safety check.
 struct Trusted(Mutex<core::trust::TrustDb>);
+/// One-time safety checks for unverified sites (core::check).
+struct Checks {
+    checker: core::check::Checker,
+    /// Sites being watched on their first visit: site -> (tab label, when it started, what the site did).
+    watching: Mutex<HashMap<String, (String, std::time::Instant, core::check::Visit)>>,
+    /// Sites that failed this session, and why (shown in the ⚠ menu; checked again next session).
+    failed: Mutex<HashMap<String, core::check::Fail>>,
+}
 /// URLs given on the command line (`r-browser example.com wikipedia.org`), opened once the UI is ready.
 struct StartUrls(Mutex<Vec<String>>);
 /// Per-webview zoom level and in-flight download paths (macOS doesn't report where a download landed).
@@ -52,6 +60,9 @@ struct Runtime {
     upgraded: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Hosts the user chose to open over plain http, this session only.
     insecure_ok: Mutex<std::collections::HashSet<String>>,
+    /// Addresses the user just asked for (typed / picked), so the safety check doesn't count them as the site
+    /// redirecting by itself.
+    user_nav: Mutex<std::collections::HashSet<String>>,
     /// App-page addresses the browser itself is about to open (see `page_url`); anything else is refused.
     app_nav: Mutex<std::collections::HashSet<String>>,
 }
@@ -340,6 +351,7 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             if p.event() == PageLoadEvent::Finished && !is_incognito(&win) && !failed {
                 lib(&a1, |l| l.record_visit(&url, &title, now_secs(), false));
                 save_library_soon(&a1);
+                start_check(&a1, wv.label(), &url);
             }
             emit(&a1, &win);
         })
@@ -392,6 +404,11 @@ fn page_url(app: &AppHandle, rb: &str) -> Option<Url> {
 /// comes straight back to http (the site redirects to http), stop and show the "no secure version" page.
 fn on_main_navigation(app: &AppHandle, url: &str, current: &str, kind: isize) -> Option<String> {
     let rt = app.state::<Runtime>();
+    // A watched site sending the tab to another site by itself (script or redirect, not a click or typing).
+    let typed = rt.user_nav.lock().unwrap().remove(url);
+    if kind == -1 && !typed && core::trust::site_of(current).is_some_and(|c| core::trust::site_of(url).as_deref() != Some(&c)) {
+        note_bad(app, current, |v| v.redirects += 1);
+    }
     if core::tabs::is_app_page(url) {
         let expected = rt.app_nav.lock().unwrap().remove(url);
         return (!core::tabs::app_nav_allowed(current, kind, expected)).then(String::new);
@@ -453,6 +470,57 @@ fn reload_tab(app: &AppHandle, win: &str, id: TabId) -> Res {
 
 fn trust_of(app: &AppHandle, url: &str) -> core::trust::Trust { app.state::<Trusted>().0.lock().unwrap().classify(url) }
 
+/// Unverified sites load locked down (Lockdown Mode: JIT and risky web features off) until they pass the check.
+fn needs_lockdown(app: &AppHandle, url: &str) -> bool {
+    Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) && trust_of(app, url) == core::trust::Trust::Unverified
+}
+
+/// First visit to an unverified site (normal windows): check its address now, then watch it for 30 s.
+fn start_check(app: &AppHandle, label: &str, url: &str) {
+    if trust_of(app, url) != core::trust::Trust::Unverified { return; }
+    let Some(site) = core::trust::site_of(url) else { return };
+    let ck = app.state::<Checks>();
+    if ck.failed.lock().unwrap().contains_key(&site) || ck.watching.lock().unwrap().contains_key(&site) { return; }
+    if let Err(f) = ck.checker.domain_checks(url) { ck.failed.lock().unwrap().insert(site, f); return; }
+    ck.watching.lock().unwrap().insert(site.clone(), (label.to_string(), std::time::Instant::now(), core::check::Visit::default()));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(core::check::WATCH_SECS));
+        finish_check(&app, &site);
+    });
+}
+
+/// The watched site did something bad: count it, and fail the check at once if that's enough.
+fn note_bad(app: &AppHandle, page: &str, f: impl FnOnce(&mut core::check::Visit)) {
+    let Some(site) = core::trust::site_of(page) else { return };
+    let ck = app.state::<Checks>();
+    let mut w = ck.watching.lock().unwrap();
+    let Some((_, at, v)) = w.get_mut(&site) else { return };
+    f(v);
+    if let Some(Err(fail)) = v.verdict(at.elapsed().as_secs()) {
+        w.remove(&site);
+        ck.failed.lock().unwrap().insert(site, fail);
+    }
+}
+
+/// 30 s after the first visit: if the tab is still on the site and nothing bad happened, it's safe from now on.
+fn finish_check(app: &AppHandle, site: &str) {
+    let ck = app.state::<Checks>();
+    let Some((label, at, v)) = ck.watching.lock().unwrap().remove(site) else { return };
+    let still_there = app.get_webview(&label).and_then(|w| w.url().ok()).is_some_and(|u| core::trust::site_of(u.as_str()).as_deref() == Some(site));
+    if !still_there { return; } // left early: check again next visit
+    match v.verdict(at.elapsed().as_secs()) {
+        Some(Ok(())) => {
+            app.state::<Trusted>().0.lock().unwrap().add(site);
+            lib(app, |l| if !l.checked.iter().any(|d| d == site) { l.checked.push(site.to_string()) });
+            save_library_soon(app);
+            if let Some((win, _)) = parse_label(app, &label) { emit(app, &win); }
+        }
+        Some(Err(f)) => { ck.failed.lock().unwrap().insert(site.to_string(), f); }
+        None => {}
+    }
+}
+
 /// The ⚠ beside the address: why the site is unverified, and "Trust this site" (not offered in incognito,
 /// where it would be saved to disk and reveal the visit).
 #[tauri::command]
@@ -462,10 +530,21 @@ async fn trust_menu(webview: Webview, app: AppHandle, window: Window) -> Res { t
     let Some(domain) = core::trust::site_of(&url) else { return Ok(()) };
     let info = |text: &str| MenuItemBuilder::new(text).enabled(false).build(&app);
     let trust = if is_incognito(&win) { format!("Trust {domain} (not in incognito)") } else { format!("Trust {domain}") };
+    let ck = app.state::<Checks>();
+    let status = if let Some(f) = ck.failed.lock().unwrap().get(&domain) {
+        format!("Safety check failed: {}.", f.reason())
+    } else if let Some((_, at, _)) = ck.watching.lock().unwrap().get(&domain) {
+        format!("Safety check running: about {} s left.", core::check::WATCH_SECS.saturating_sub(at.elapsed().as_secs()))
+    } else if is_incognito(&win) {
+        "Sites aren't safety-checked in incognito.".to_string()
+    } else {
+        "Safety check starts when the page finishes loading.".to_string()
+    };
     let menu = tauri::menu::MenuBuilder::new(&app)
         .item(&info(&format!("R-Browser doesn't know {domain}")).map_err(err)?)
         .item(&info("It isn't one of the 10,000 most-visited sites and you haven't trusted it.").map_err(err)?)
-        .item(&info("New and lookalike sites are where most scams live: check the address before signing in.").map_err(err)?)
+        .item(&info("Until it passes a safety check it runs locked down: JavaScript is slower, and video calls, games and offline storage are off.").map_err(err)?)
+        .item(&info(&status).map_err(err)?)
         .separator()
         // The domain shown is in the id: if the tab moves to another site before the click, nothing is trusted.
         .item(&MenuItemBuilder::with_id(format!("tr|{win}|trust|{id}|{domain}"), trust).enabled(!is_incognito(&win)).build(&app).map_err(err)?)
@@ -821,6 +900,7 @@ async fn navigate(webview: Webview, app: AppHandle, window: Window, id: TabId, i
         WebviewUrl::App(_) => page_url(&app, &url).ok_or("bad page")?,
         _ => return Err("bad url".into()),
     };
+    app.state::<Runtime>().user_nav.lock().unwrap().insert(dest.to_string());
     wv.navigate(dest).map_err(err)?;
     let _ = wv.set_focus();
     emit(&app, win);
@@ -1055,6 +1135,7 @@ async fn page_event(webview: Webview, app: AppHandle, ev: PageEvent) -> Res {
     let page = webview.url().map(|u| u.to_string()).unwrap_or_default();
     if ev.kind == "popup-blocked" {
         let ok = ev.url.len() < 4096 && url::Url::parse(&ev.url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"));
+        if ok { note_bad(&app, &page, |v| v.popups += 1); }
         // Only the tab you're looking at can raise the prompt, so a background tab can't swap its pop-up in behind it.
         if !ok || with(&app, &win, |l| l.active) != Some(id) { return Ok(()); }
         if lib(&app, |l| l.popups_ok(&page)) { return open_tab(&app, &win, &ev.url); }
@@ -1277,15 +1358,19 @@ fn on_menu(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
-        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default(), app_nav: Mutex::default() })
+        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default(), app_nav: Mutex::default(), user_nav: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
         .setup(|app| {
             let handle = app.handle().clone();
             let library = data_file(&handle, "library.json").and_then(|p| store::load::<Library>(&p)).unwrap_or_default();
-            let trusted = core::trust::TrustDb::new(include_str!("../resources/top10k.txt"), library.trusted.clone());
+            let top = include_str!("../resources/top10k.txt");
+            let trusted = core::trust::TrustDb::new(top, library.trusted.iter().chain(&library.checked).cloned());
             app.manage(Trusted(Mutex::new(trusted)));
+            let lists = [include_str!("../resources/lists/peterlowe.txt"), include_str!("../resources/lists/nocoin.txt")].concat();
+            let top: Vec<String> = top.lines().map(String::from).collect();
+            app.manage(Checks { checker: core::check::Checker::new(&top, &lists), watching: Mutex::default(), failed: Mutex::default() });
             app.manage(Lib(Mutex::new(library)));
             app.set_menu(build_menu(&handle)?)?;
             app.on_menu_event(|app, e| on_menu(app, e.id().as_ref()));
@@ -1295,6 +1380,8 @@ pub fn run() {
             platform::on_load_failed(move |e, url, domain, code, desc| on_load_failed(&h, e, url, domain, code, desc));
             let h = handle.clone();
             platform::on_main_navigation(move |url, cur, kind| on_main_navigation(&h, &url, &cur, kind));
+            let h = handle.clone();
+            platform::on_lockdown(move |url| needs_lockdown(&h, &url));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

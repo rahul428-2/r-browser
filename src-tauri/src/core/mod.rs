@@ -4,6 +4,7 @@ pub mod trust;
 pub mod session;
 pub mod store;
 pub mod blocker;
+pub mod check;
 pub mod errors;
 pub mod https;
 pub mod library;
