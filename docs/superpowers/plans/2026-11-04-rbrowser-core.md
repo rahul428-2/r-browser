@@ -32,6 +32,8 @@
 - **d3ward.github.io/toolz/adblock is archived** (Task 4 Step 7): verified instead with a local page loading gtag / Hotjar / comScore / LinkedIn Insight + a jQuery control and an EasyList `##.ADBox` element: blocking on → 4/4 blocked, jQuery loaded, box hidden; site switched off → all loaded.
 - **Blocking switch is per host, applied at navigation start** (Task 4): the rule list is swapped on the tab's content controller when a page starts loading, so the main document request itself is never blocked (same as ABP's default).
 - **HTTPS-only is macOS-only so far** (Task 5): wry's navigation hook sees every frame, so the upgrade wraps wry's `decidePolicyForNavigationAction` (main frame only) at runtime. WebView2 (`NavigationStarting`) / WebKitGTK → Task 14. `https::upgrade` takes the session allow-list as a parameter; explicit ports, private IPs and intranet names (no dot, .local, .lan, .internal, .home.arpa) are never upgraded. An https attempt that redirects straight back to http within 15 s counts as "no secure version". Only `rb://insecure` (not blocked/warning) exists yet — those belong to Tasks 6/10.
+- **Safe Browsing not built yet** (Task 6): it needs a Google Safe Browsing API key (free, non-commercial) to download hash prefixes and confirm hits; none exists, so `safebrowsing.rs`, the Malicious state and `rb://blocked` wait until Rahul creates one. Verified/unverified (top-10k + user trust) works without it.
+- **Trust UI is a native menu, not a popover** (Task 6): same pattern as the shield menu. "Trust this site" is disabled in incognito (it would be saved to disk). Top-list weekly refresh → Task 14 with the filter lists.
 - **Incognito tabs are isolated from each other on macOS** (wry gives each incognito webview its own non-persistent store; Chrome shares one per incognito window). Stricter than Chrome; acceptable for v1.
 
 ## Review Focus
@@ -190,7 +192,7 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 - `SbList { prefixes: HashSet<[u8;4]> }`; `expressions(url: &str) -> Vec<String>` (Safe Browsing v4 host-suffix × path-prefix combos, max 5 hosts × 6 paths); `SbList::prefix_hit(&self, url) -> bool`; `confirm_full_hash(url, key) -> bool` (async, only on prefix hit, only if `RB_SAFE_BROWSING_KEY` was set at build time or in settings). No key → Safe Browsing skipped, top-list logic still runs.
 - Rules: localhost/private IP/`rb://` → Verified. Registrable domain in `top` or `user` → Verified unless SB hit. SB confirmed hit → Malicious.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```rust
 #[test] fn top_domain_verified() { /* top={"google.com"}; "https://mail.google.com/x" -> Verified */ }
@@ -202,10 +204,10 @@ Expected: `cargo tauri --version` prints `tauri-cli 2.x`.
 #[test] fn sb_expressions_match_spec_example() { /* "http://a.b.c/1/2.html?param=1" yields the 8 expressions from the Safe Browsing v4 docs */ }
 ```
 
-- [ ] **Step 2: Run, FAIL. Step 3: Implement.**
+- [x] **Step 2: Run, FAIL. Step 3: Implement.**
 - [ ] **Step 4: Wire:** classify in `on_navigation`; Malicious → `rb://blocked` (Go back / Proceed anyway behind second confirm); Unverified → load + emit `trust-changed` → UI shows ⚠ left of the URL; click → popover with reason + "Trust this site". Weekly refresh task for top list + SB prefixes (stored in app data dir, bundled copy as fallback).
 - [ ] **Step 5: Verify** tests; manual: `wikipedia.org` no ⚠; a random small blog shows ⚠; Trust → ⚠ gone after reload and after restart; `https://testsafebrowsing.appspot.com/s/malware.html` → blocked page (when key set).
-- [ ] **Step 6: Commit** `feat: verified-site warnings and safe browsing`
+- [x] **Step 6: Commit** `feat: verified-site warnings and safe browsing`
 
 ---
 

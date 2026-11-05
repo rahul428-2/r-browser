@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-trust-menu"
+description = "Enables the trust_menu command without any pre-configured scope."
+commands.allow = ["trust_menu"]
+
+[[permission]]
+identifier = "deny-trust-menu"
+description = "Denies the trust_menu command without any pre-configured scope."
+commands.deny = ["trust_menu"]

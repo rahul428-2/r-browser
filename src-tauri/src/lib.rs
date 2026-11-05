@@ -27,6 +27,8 @@ const ZOOM_STEPS: [f64; 9] = [0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0];
 struct Browser(Mutex<HashMap<String, TabList>>);
 /// Bookmarks, history, downloads (normal windows only).
 struct Lib(Mutex<Library>);
+/// Verified-site lists: bundled top sites + the user's trusted sites.
+struct Trusted(Mutex<core::trust::TrustDb>);
 /// URLs given on the command line (`r-browser example.com wikipedia.org`), opened once the UI is ready.
 struct StartUrls(Mutex<Vec<String>>);
 /// Per-webview zoom level and in-flight download paths (macOS doesn't report where a download landed).
@@ -136,13 +138,16 @@ struct UiState {
     #[serde(flatten)]
     list: TabList,
     bookmarked: bool,
+    /// The active tab's site isn't a well-known or user-trusted one (⚠ beside the address).
+    unverified: bool,
 }
 
 fn emit(app: &AppHandle, win: &str) {
     let list = with(app, win, |l| l.clone());
     let url = list.active.and_then(|a| list.get(a)).map(|t| t.url.clone()).unwrap_or_default();
     let bookmarked = lib(app, |l| l.is_bookmarked(&url));
-    let _ = app.emit_to(ui_label(win), "tabs-changed", UiState { win: win.to_string(), list, bookmarked });
+    let unverified = trust_of(app, &url) == core::trust::Trust::Unverified;
+    let _ = app.emit_to(ui_label(win), "tabs-changed", UiState { win: win.to_string(), list, bookmarked, unverified });
     if !is_incognito(win) { save_session_soon(app); }
 }
 
@@ -420,6 +425,39 @@ fn reload_tab(app: &AppHandle, win: &str, id: TabId) -> Res {
         Some(u) => wv.navigate(u).map_err(err),
         None => wv.reload().map_err(err),
     }
+}
+
+// ---- verified / unverified sites ----
+
+fn trust_of(app: &AppHandle, url: &str) -> core::trust::Trust { app.state::<Trusted>().0.lock().unwrap().classify(url) }
+
+/// The ⚠ beside the address: why the site is unverified, and "Trust this site" (not offered in incognito,
+/// where it would be saved to disk and reveal the visit).
+#[tauri::command]
+async fn trust_menu(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
+    let win = window.label().to_string();
+    let Some((id, url)) = with(&app, &win, |l| l.active.and_then(|a| l.get(a).map(|t| (a, t.url.clone())))) else { return Ok(()) };
+    let Some(domain) = Url::parse(&url).ok().and_then(|u| u.host_str().and_then(core::trust::registrable)) else { return Ok(()) };
+    let info = |text: &str| MenuItemBuilder::new(text).enabled(false).build(&app);
+    let trust = if is_incognito(&win) { format!("Trust {domain} (not in incognito)") } else { format!("Trust {domain}") };
+    let menu = tauri::menu::MenuBuilder::new(&app)
+        .item(&info(&format!("R-Browser doesn't know {domain}")).map_err(err)?)
+        .item(&info("It isn't one of the 10,000 most-visited sites and you haven't trusted it.").map_err(err)?)
+        .item(&info("New and lookalike sites are where most scams live: check the address before signing in.").map_err(err)?)
+        .separator()
+        .item(&MenuItemBuilder::with_id(format!("tr|{win}|trust|{id}"), trust).enabled(!is_incognito(&win)).build(&app).map_err(err)?)
+        .build().map_err(err)?;
+    window.popup_menu(&menu).map_err(err)
+}
+
+fn trust_site(app: &AppHandle, win: &str, id: TabId) -> Res {
+    if is_incognito(win) { return Ok(()); }
+    let url = with(app, win, |l| l.get(id).map(|t| t.url.clone())).ok_or("no such tab")?;
+    let Some(d) = app.state::<Trusted>().0.lock().unwrap().trust(&url) else { return Ok(()) };
+    lib(app, |l| if !l.trusted.contains(&d) { l.trusted.push(d) });
+    save_library_soon(app);
+    emit(app, win);
+    Ok(())
 }
 
 // ---- ad / tracker blocking ----
@@ -929,6 +967,7 @@ fn on_popup(app: &AppHandle, id: &str) -> Res {
     let num = |i: usize| p.get(i).and_then(|x| x.parse::<u64>().ok()).ok_or("bad menu id");
     match (kind, p.get(2).copied().unwrap_or_default()) {
         ("b", "toggle") => toggle_blocking(app, win, num(3)?)?,
+        ("tr", "trust") => trust_site(app, win, num(3)?)?,
         ("pw", _) => return fill_password(app, win, num(2)?, id.splitn(4, '|').nth(3).unwrap_or_default()),
         ("t", "new") => {
             let g = with(app, win, |l| l.new_group(num(3).unwrap_or(0)));
@@ -1208,6 +1247,8 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let library = data_file(&handle, "library.json").and_then(|p| store::load::<Library>(&p)).unwrap_or_default();
+            let trusted = core::trust::TrustDb::new(include_str!("../resources/top10k.txt"), library.trusted.clone());
+            app.manage(Trusted(Mutex::new(trusted)));
             app.manage(Lib(Mutex::new(library)));
             app.set_menu(build_menu(&handle)?)?;
             app.on_menu_event(|app, e| on_menu(app, e.id().as_ref()));
@@ -1225,7 +1266,7 @@ pub fn run() {
             downloads_list, show_download,
             tab_menu, group_menu, group_toggle, group_rename, move_tab, tear_start, tear_move, tear_end, attach_tab,
             page_event, password_save, password_never, password_dismiss, password_menu,
-            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss, insecure_continue
+            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss, insecure_continue, trust_menu
         ])
         .run(tauri::generate_context!())
         .expect("error while running R-Browser");

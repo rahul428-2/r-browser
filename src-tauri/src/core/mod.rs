@@ -1,5 +1,6 @@
 pub mod omnibox;
 pub mod tabs;
+pub mod trust;
 pub mod session;
 pub mod store;
 pub mod blocker;

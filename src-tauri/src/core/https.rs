@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 /// Home networks, this machine and intranet names: these rarely have https and never need it to be safe.
-fn local(host: &url::Host<&str>) -> bool {
+pub(crate) fn local(host: &url::Host<&str>) -> bool {
     match host {
         url::Host::Ipv4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
         url::Host::Ipv6(ip) => ip.is_loopback() || (ip.segments()[0] & 0xfe00) == 0xfc00 || (ip.segments()[0] & 0xffc0) == 0xfe80,

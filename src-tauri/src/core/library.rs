@@ -31,6 +31,9 @@ pub struct Library {
     /// Hosts allowed to open pop-ups without a click.
     #[serde(default)]
     pub popups: Vec<String>,
+    /// Sites (registrable domains) the user marked "Trust this site".
+    #[serde(default)]
+    pub trusted: Vec<String>,
 }
 
 /// The site a per-site setting is keyed on: the host of an http(s) URL.

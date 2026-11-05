@@ -181,6 +181,7 @@ function renderBar() {
   }
   $("key").hidden = incognito || !(cur && cur.login_form);
   $("star").classList.toggle("on", !!state.bookmarked);
+  $("unv").hidden = !state.unverified;
   $("star").title = state.bookmarked ? "Remove bookmark (Ctrl/⌘+D)" : "Bookmark this page (Ctrl/⌘+D)";
   if (document.activeElement !== $("url")) {
     $("url").value = url;
@@ -355,6 +356,8 @@ me.listen("save-password", (e) => {
 $("pwsave").onclick = () => { hidePw(); invoke("password_save").catch(() => {}); };
 $("pwnever").onclick = () => { hidePw(); invoke("password_never"); };
 $("pwx").onclick = () => { hidePw(); invoke("password_dismiss"); };
+
+$("unv").onclick = (e) => { e.preventDefault(); invoke("trust_menu").catch(() => {}); };
 
 // ---- shield chip: per-site blocking switch; blocked pop-up prompt ----
 $("chip").onclick = (e) => { e.preventDefault(); if ($("omni").dataset.state !== "none") invoke("shield_menu").catch(() => {}); };

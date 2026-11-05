@@ -47,6 +47,7 @@
     "allow-attach-tab",
     "allow-shield-menu",
     "allow-popup-allow",
-    "allow-popup-dismiss"
+    "allow-popup-dismiss",
+    "allow-trust-menu"
   ]
 }
