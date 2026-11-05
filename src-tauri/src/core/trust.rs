@@ -4,11 +4,18 @@
 use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Trust { Verified, Unverified }
+pub enum Trust {
+    Verified,
+    /// Passed the one-time safety check: runs at full speed, but still shows a soft "Checked" badge, since a
+    /// fresh phishing site can pass it too (Rahul's choice, 5 Nov). Only the user's "Trust" makes it Verified.
+    Checked,
+    Unverified,
+}
 
 pub struct TrustDb {
     top: HashSet<String>,
     user: HashSet<String>,
+    checked: HashSet<String>,
 }
 
 /// The part of a host someone actually registered: `mail.google.com` -> `google.com`, `evil.github.io` ->
@@ -33,7 +40,7 @@ pub fn site_of(url: &str) -> Option<String> {
 impl TrustDb {
     /// `top`: one domain per line (the bundled Tranco list). `user`: domains the user trusted.
     pub fn new(top: &str, user: impl IntoIterator<Item = String>) -> TrustDb {
-        TrustDb { top: top.lines().map(|l| l.trim().to_ascii_lowercase()).filter(|l| !l.is_empty()).collect(), user: user.into_iter().collect() }
+        TrustDb { top: top.lines().map(|l| l.trim().to_ascii_lowercase()).filter(|l| !l.is_empty()).collect(), user: user.into_iter().collect(), checked: HashSet::new() }
     }
 
     /// Fails closed: only the new tab, the browser's own pages and known web sites are Verified; data:, file:,
@@ -46,15 +53,16 @@ impl TrustDb {
         if u.host().is_some_and(|h| crate::core::https::local(&h)) { return Trust::Verified; }
         match site_of(url) {
             Some(d) if self.top.contains(&d) || self.user.contains(&d) => Trust::Verified,
+            Some(d) if self.checked.contains(&d) => Trust::Checked,
             _ => Trust::Unverified,
         }
     }
 
-    /// Replace the user-trusted / checked sites (after clearing history forgets the checked ones).
-    pub fn set_user(&mut self, domains: impl IntoIterator<Item = String>) { self.user = domains.into_iter().collect(); }
+    /// `domain` (a `site_of` key) passed the safety check.
+    pub fn add_checked(&mut self, domain: &str) { self.checked.insert(domain.to_string()); }
 
-    /// Treat `domain` (a `site_of` key) as verified from now on.
-    pub fn add(&mut self, domain: &str) { self.user.insert(domain.to_string()); }
+    /// Clearing history forgets which sites passed the check.
+    pub fn clear_checked(&mut self) { self.checked.clear(); }
 
     /// Trust `url`'s site from now on; returns the domain that was added.
     pub fn trust(&mut self, url: &str) -> Option<String> {
@@ -133,5 +141,16 @@ mod tests {
     fn blob_url_uses_its_real_site() {
         assert_eq!(db().classify("blob:https://evil-login.net/1b2c"), Trust::Unverified);
         assert_eq!(db().classify("blob:https://mail.google.com/1b2c"), Trust::Verified);
+    }
+
+    #[test]
+    fn checked_site_is_checked_not_verified() {
+        let mut d = db();
+        d.add_checked("jvns.ca");
+        assert_eq!(d.classify("https://jvns.ca/"), Trust::Checked);
+        d.trust("https://jvns.ca/");
+        assert_eq!(d.classify("https://jvns.ca/"), Trust::Verified); // the user's own trust wins
+        d.clear_checked();
+        assert_eq!(d.classify("https://jvns.ca/"), Trust::Verified);
     }
 }

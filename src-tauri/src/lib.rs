@@ -151,14 +151,17 @@ struct UiState {
     bookmarked: bool,
     /// The active tab's site isn't a well-known or user-trusted one (⚠ beside the address).
     unverified: bool,
+    /// ...or it only passed the automatic safety check (soft "Checked" badge).
+    checked: bool,
 }
 
 fn emit(app: &AppHandle, win: &str) {
     let list = with(app, win, |l| l.clone());
     let url = list.active.and_then(|a| list.get(a)).map(|t| t.url.clone()).unwrap_or_default();
     let bookmarked = lib(app, |l| l.is_bookmarked(&url));
-    let unverified = trust_of(app, &url) == core::trust::Trust::Unverified;
-    let _ = app.emit_to(ui_label(win), "tabs-changed", UiState { win: win.to_string(), list, bookmarked, unverified });
+    let trust = trust_of(app, &url);
+    let (unverified, checked) = (trust == core::trust::Trust::Unverified, trust == core::trust::Trust::Checked);
+    let _ = app.emit_to(ui_label(win), "tabs-changed", UiState { win: win.to_string(), list, bookmarked, unverified, checked });
     if !is_incognito(win) { save_session_soon(app); }
 }
 
@@ -511,7 +514,7 @@ fn finish_check(app: &AppHandle, site: &str) {
     if !still_there { return; } // left early: check again next visit
     match v.verdict(at.elapsed().as_secs()) {
         Some(Ok(())) => {
-            app.state::<Trusted>().0.lock().unwrap().add(site);
+            app.state::<Trusted>().0.lock().unwrap().add_checked(site);
             lib(app, |l| if !l.checked.iter().any(|d| d == site) { l.checked.push(site.to_string()) });
             save_library_soon(app);
             if let Some((win, _)) = parse_label(app, &label) { emit(app, &win); }
@@ -540,6 +543,16 @@ async fn trust_menu(webview: Webview, app: AppHandle, window: Window) -> Res { t
     } else {
         "Safety check starts when the page finishes loading.".to_string()
     };
+    if trust_of(&app, &url) == core::trust::Trust::Checked {
+        let menu = tauri::menu::MenuBuilder::new(&app)
+            .item(&info(&format!("{domain} passed R-Browser's safety check, so it runs at full speed")).map_err(err)?)
+            .item(&info("But it isn't a well-known site, and a brand-new phishing site can pass the check too.").map_err(err)?)
+            .item(&info("Check the address before you sign in or pay.").map_err(err)?)
+            .separator()
+            .item(&MenuItemBuilder::with_id(format!("tr|{win}|trust|{id}|{domain}"), trust).enabled(!is_incognito(&win)).build(&app).map_err(err)?)
+            .build().map_err(err)?;
+        return window.popup_menu(&menu).map_err(err);
+    }
     let menu = tauri::menu::MenuBuilder::new(&app)
         .item(&info(&format!("R-Browser doesn't know {domain}")).map_err(err)?)
         .item(&info("It isn't one of the 10,000 most-visited sites and you haven't trusted it.").map_err(err)?)
@@ -934,8 +947,8 @@ fn history_search(webview: Webview, app: AppHandle, query: String) -> Result<Vec
 
 #[tauri::command]
 fn history_clear(webview: Webview, app: AppHandle) -> Res { trusted(&webview)?;
-    let kept = lib(&app, |l| { l.clear_history(); l.trusted.clone() });
-    app.state::<Trusted>().0.lock().unwrap().set_user(kept);
+    lib(&app, |l| l.clear_history());
+    app.state::<Trusted>().0.lock().unwrap().clear_checked();
     save_library_soon(&app);
     Ok(())
 }
@@ -1371,7 +1384,8 @@ pub fn run() {
             let handle = app.handle().clone();
             let library = data_file(&handle, "library.json").and_then(|p| store::load::<Library>(&p)).unwrap_or_default();
             let top = include_str!("../resources/top10k.txt");
-            let trusted = core::trust::TrustDb::new(top, library.trusted.iter().chain(&library.checked).cloned());
+            let mut trusted = core::trust::TrustDb::new(top, library.trusted.iter().cloned());
+            for d in &library.checked { trusted.add_checked(d); }
             app.manage(Trusted(Mutex::new(trusted)));
             let lists = [include_str!("../resources/lists/peterlowe.txt"), include_str!("../resources/lists/nocoin.txt")].concat();
             let top: Vec<String> = top.lines().map(String::from).collect();

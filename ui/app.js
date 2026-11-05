@@ -179,7 +179,11 @@ function renderBar() {
   }
   $("key").hidden = incognito || !(cur && cur.login_form);
   $("star").classList.toggle("on", !!state.bookmarked);
-  $("unv").hidden = !state.unverified;
+  $("unv").hidden = !(state.unverified || state.checked);
+  $("unv").classList.toggle("soft", !!state.checked);
+  $("unv").lastChild.textContent = state.checked ? "Checked" : "Unverified";
+  if ($("unv").dataset.icon !== (state.checked ? "c" : "u")) { $("unv").dataset.icon = state.checked ? "c" : "u"; $("unv").firstChild.replaceWith(icon(state.checked ? "i-shield" : "i-warn")); }
+  $("unv").title = state.checked ? "Passed the safety check, but not a well-known site: click for details" : "Unverified site: click to see why";
   // The styled address overlays the input: keep it where the input starts (the badge pushes it right).
   $("pretty").style.left = $("url").offsetLeft + "px";
   $("star").title = state.bookmarked ? "Remove bookmark (Ctrl/⌘+D)" : "Bookmark this page (Ctrl/⌘+D)";

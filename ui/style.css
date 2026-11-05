@@ -125,6 +125,8 @@ body.mac #strip { padding-left: 80px; }
 #unv svg { width: 13px; height: 13px; }
 #unv[hidden] { display: none; }
 #unv:hover { background: #f5b54a33; }
+#unv.soft { background: #7d8ba31f; color: var(--fog); }
+#unv.soft:hover { background: #7d8ba333; color: var(--ice); }
 #key:hover { color: var(--signal); }
 
 .pill { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px auto; height: 26px; padding: 0 4px 0 9px;
