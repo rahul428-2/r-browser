@@ -143,16 +143,17 @@ pub fn on_load_failed(f: impl Fn(usize, String, String, i64, String) + Send + Sy
     let _ = LOAD_FAILED.set(Box::new(f));
 }
 
-/// Called for every main-frame navigation; returns a URL to load instead (https upgrade or an rb:// page).
+/// Called for every main-frame navigation with (target URL, the tab's current URL, WKNavigationType); returns a
+/// URL to load instead (https upgrade or an rb:// page), or "" to cancel it.
 #[cfg(target_os = "macos")]
-type Redirect = Box<dyn Fn(String) -> Option<String> + Send + Sync>;
+type Redirect = Box<dyn Fn(String, String, isize) -> Option<String> + Send + Sync>;
 #[cfg(target_os = "macos")]
 static REDIRECT: std::sync::OnceLock<Redirect> = std::sync::OnceLock::new();
 #[cfg(target_os = "macos")]
 static WRY_POLICY: std::sync::OnceLock<objc2::runtime::Imp> = std::sync::OnceLock::new();
 
 #[cfg(target_os = "macos")]
-pub fn on_main_navigation(f: impl Fn(String) -> Option<String> + Send + Sync + 'static) {
+pub fn on_main_navigation(f: impl Fn(String, String, isize) -> Option<String> + Send + Sync + 'static) {
     let _ = REDIRECT.set(Box::new(f));
 }
 
@@ -168,8 +169,15 @@ unsafe extern "C-unwind" fn decide_policy(this: *mut objc2::runtime::AnyObject, 
         let main = !frame.is_null() && { let m: Bool = msg_send![frame, isMainFrame]; m.as_bool() };
         let req: *mut NSURLRequest = msg_send![action, request];
         let url = req.as_ref().and_then(|r| r.URL()).and_then(|u| u.absoluteString()).map(|s| s.to_string());
-        match (main, url, REDIRECT.get()) { (true, Some(u), Some(f)) => f(u), _ => None }
+        let cur: *mut NSURL = msg_send![wv, URL];
+        let cur = cur.as_ref().and_then(|u| u.absoluteString()).map(|s| s.to_string()).unwrap_or_default();
+        let kind: isize = msg_send![action, navigationType];
+        match (main, url, REDIRECT.get()) { (true, Some(u), Some(f)) => f(u, cur, kind), _ => None }
     };
+    if instead.as_deref() == Some("") {
+        unsafe { (*handler).call((0,)) }; // cancel
+        return;
+    }
     if let Some(to) = instead.and_then(|t| NSURL::URLWithString(&NSString::from_str(&t))) {
         unsafe {
             (*handler).call((0,)); // WKNavigationActionPolicyCancel
@@ -244,6 +252,6 @@ pub fn on_load_failed(_: impl Fn(usize, String, String, i64, String) + Send + Sy
 pub fn hook_delegate() {}
 // ponytail: HTTPS upgrade on WebView2/WebKitGTK comes with their Task 14 glue (WebView2 NavigationStarting).
 #[cfg(not(target_os = "macos"))]
-pub fn on_main_navigation(_: impl Fn(String) -> Option<String> + Send + Sync + 'static) {}
+pub fn on_main_navigation(_: impl Fn(String, String, isize) -> Option<String> + Send + Sync + 'static) {}
 #[cfg(not(target_os = "macos"))]
 pub fn show_html(_: &tauri::Webview, _: String, _: String) {}

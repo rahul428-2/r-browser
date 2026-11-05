@@ -50,6 +50,8 @@ struct Runtime {
     upgraded: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Hosts the user chose to open over plain http, this session only.
     insecure_ok: Mutex<std::collections::HashSet<String>>,
+    /// App-page addresses the browser itself is about to open (see `page_url`); anything else is refused.
+    app_nav: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Password vault runtime state. Plaintext only exists inside `with_vault`.
@@ -349,17 +351,24 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
 
 // ---- sites that can't be opened ----
 
-/// Full address of an app page (`rb://name?query`): same origin as the toolbar UI.
+/// Full address of an app page (`rb://name?query`): same origin as the toolbar UI. Only addresses made here
+/// may be opened from a website tab, so call this only for navigations the browser itself starts.
 fn page_url(app: &AppHandle, rb: &str) -> Option<Url> {
     let page = rb_page(rb)?;
     let base = app.webviews().into_values().find(|w| w.label().ends_with("-ui"))?.url().ok()?;
-    base.join(&format!("/{page}")).ok()
+    let u = base.join(&format!("/{page}")).ok()?;
+    app.state::<Runtime>().app_nav.lock().unwrap().insert(u.to_string());
+    Some(u)
 }
 
 /// HTTPS-only, for every top-level navigation: try http:// sites over https first. If the https attempt
 /// comes straight back to http (the site redirects to http), stop and show the "no secure version" page.
-fn on_main_navigation(app: &AppHandle, url: &str) -> Option<String> {
+fn on_main_navigation(app: &AppHandle, url: &str, current: &str, kind: isize) -> Option<String> {
     let rt = app.state::<Runtime>();
+    if core::tabs::is_app_page(url) {
+        let expected = rt.app_nav.lock().unwrap().remove(url);
+        return (!core::tabs::app_nav_allowed(current, kind, expected)).then(String::new);
+    }
     let to = core::https::upgrade(url, &rt.insecure_ok.lock().unwrap())?;
     let host = Url::parse(url).ok()?.host_str()?.to_string();
     let mut up = rt.upgraded.lock().unwrap();
@@ -1192,7 +1201,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
-        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default() })
+        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default(), app_nav: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
         .manage(StartUrls(Mutex::new(std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect())))
@@ -1207,7 +1216,7 @@ pub fn run() {
             let h = handle.clone();
             platform::on_load_failed(move |e, url, domain, code, desc| on_load_failed(&h, e, url, domain, code, desc));
             let h = handle.clone();
-            platform::on_main_navigation(move |url| on_main_navigation(&h, &url));
+            platform::on_main_navigation(move |url, cur, kind| on_main_navigation(&h, &url, &cur, kind));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -65,6 +65,20 @@ pub fn to_rb(url: &str) -> String {
     }
 }
 
+/// WKNavigationType values a website can't fake into an app page: going back/forward, or reloading one.
+pub const NAV_BACK_FORWARD: isize = 2;
+pub const NAV_RELOAD: isize = 3;
+
+/// May a tab's top-level navigation to one of the app's own pages go ahead? Only when the tab is already on an
+/// app page, is fresh, is going back/forward or reloading, or the browser itself started it (`expected`) —
+/// never because a website sent it there (app pages can call the browser's privileged commands).
+pub fn is_app_page(url: &str) -> bool { app_page(url).is_some() }
+
+pub fn app_nav_allowed(current: &str, nav_type: isize, expected: bool) -> bool {
+    expected || current.is_empty() || current == "about:blank" || app_page(current).is_some()
+        || matches!(nav_type, NAV_BACK_FORWARD | NAV_RELOAD)
+}
+
 /// `rb://history` -> `pages/history.html` (only plain names, so no path tricks); a `?query` is kept.
 pub fn rb_page(url: &str) -> Option<String> {
     let (name, query) = match url.strip_prefix("rb://")?.split_once('?') { Some((n, q)) => (n, Some(q)), None => (url.strip_prefix("rb://")?, None) };
@@ -340,5 +354,21 @@ mod tests {
         assert_eq!(l.get(d).unwrap().group, None);
         l.move_to(b, None, Some(g)); // end of the strip is after d, not next to g either
         assert_eq!((ids(&l), l.get(b).unwrap().group), (vec![c, a, d, b], None));
+    }
+
+    #[test]
+    fn website_cannot_open_app_page() {
+        assert!(!app_nav_allowed("https://evil.com/", -1, false)); // location = "tauri://localhost/pages/passwords.html"
+        assert!(!app_nav_allowed("https://evil.com/", 0, false)); // a link
+    }
+
+    #[test]
+    fn app_pages_open_when_browser_or_user_does_it() {
+        assert!(app_nav_allowed("https://news.com/", -1, true)); // typed rb://history, or the insecure page
+        assert!(app_nav_allowed("", -1, false)); // new tab
+        assert!(app_nav_allowed("about:blank", -1, false));
+        assert!(app_nav_allowed("tauri://localhost/pages/insecure.html?url=x", 0, false)); // "Go back" to the new tab page
+        assert!(app_nav_allowed("https://news.com/", NAV_BACK_FORWARD, false));
+        assert!(app_nav_allowed("https://news.com/", NAV_RELOAD, false));
     }
 }
