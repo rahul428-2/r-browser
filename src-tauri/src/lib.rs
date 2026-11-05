@@ -356,14 +356,17 @@ async fn shield_menu(webview: Webview, app: AppHandle, window: Window) -> Res { 
     let Some((id, url)) = with(&app, &win, |l| l.active.and_then(|a| l.get(a).map(|t| (a, t.url.clone())))) else { return Ok(()) };
     let Some(host) = site(&url) else { return Ok(()) };
     let on = lib(&app, |l| l.blocking_on(&url));
+    // Incognito can't change site settings: they'd be saved to disk and reveal where you went.
+    let text = if is_incognito(&win) { format!("Block ads and trackers on {host} (always on in incognito)") } else { format!("Block ads and trackers on {host}") };
     let menu = tauri::menu::MenuBuilder::new(&app)
-        .item(&CheckMenuItemBuilder::with_id(format!("b|{win}|toggle|{id}"), format!("Block ads and trackers on {host}")).checked(on).build(&app).map_err(err)?)
+        .item(&CheckMenuItemBuilder::with_id(format!("b|{win}|toggle|{id}"), text).checked(on).enabled(!is_incognito(&win)).build(&app).map_err(err)?)
         .build().map_err(err)?;
     window.popup_menu(&menu).map_err(err)
 }
 
 /// Turn blocking on/off for the tab's site, then reload so the page loads with the new setting.
 fn toggle_blocking(app: &AppHandle, win: &str, id: TabId) -> Res {
+    if is_incognito(win) { return Ok(()); }
     let url = with(app, win, |l| l.get(id).map(|t| t.url.clone())).ok_or("no such tab")?;
     lib(app, |l| l.toggle_blocking(&url));
     save_library_soon(app);
@@ -375,8 +378,10 @@ fn toggle_blocking(app: &AppHandle, win: &str, id: TabId) -> Res {
 #[tauri::command]
 async fn popup_allow(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
     let Some((page, url)) = app.state::<Runtime>().popups.lock().unwrap().remove(window.label()) else { return Ok(()) };
-    lib(&app, |l| l.allow_popups(&page));
-    save_library_soon(&app);
+    if !is_incognito(window.label()) {
+        lib(&app, |l| l.allow_popups(&page));
+        save_library_soon(&app);
+    }
     open_tab(&app, window.label(), &url)
 }
 
