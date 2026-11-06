@@ -237,6 +237,9 @@ fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::R
     #[cfg(target_os = "macos")]
     let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
     let w = builder.build()?;
+    // Windows/Linux: no File/Edit bar under the title; the menu stays attached so its shortcuts still work.
+    #[cfg(not(target_os = "macos"))]
+    w.hide_menu()?;
     app.state::<Browser>().inner().0.lock().unwrap().insert(win.to_string(), TabList::default());
     let (width, _) = content_area(&w);
     let ui = w.add_child(
