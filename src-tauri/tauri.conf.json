@@ -29,7 +29,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installerHooks": "windows/hooks.nsh"
+      }
+    }
   },
   "plugins": {
     "updater": {
