@@ -25,13 +25,27 @@ A security-first, lightweight desktop browser. No Chromium: built on [Tauri](htt
 
 Details in [bench/README.md](bench/README.md).
 
-## Install (macOS 13+)
+## Download
 
-Download `R-Browser.app.tar.gz` from [Releases](../../releases/latest), unpack it and move **R-Browser.app** to Applications.
-The app is not notarized (no paid certificate), so the first time: right-click it → **Open** → **Open**.
-After that it updates itself.
+| Windows 10/11 (64-bit) | macOS 13+ (Apple silicon) |
+|---|---|
+| **[⬇ R-Browser-Windows-Setup.exe](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser-Windows-Setup.exe)** | **[⬇ R-Browser.app.tar.gz](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser.app.tar.gz)** |
 
-Windows and Linux builds are planned.
+**Windows:** run the setup file. Until the installer is code-signed, SmartScreen may say "Windows protected your PC": click **More info** → **Run anyway**.
+**macOS:** unpack it and move **R-Browser.app** to Applications. The app is not notarized (no paid certificate), so the first time: right-click it → **Open** → **Open**.
+
+Both update themselves after that. Linux is planned. All files: [Releases](https://github.com/rahul428-2/r-browser/releases/latest).
+
+## Code signing policy
+
+Windows installers will be signed once the application is approved: free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [rahul428-2](https://github.com/rahul428-2)
+- Approvers: [rahul428-2](https://github.com/rahul428-2)
+
+Every signed file is built from this repository by GitHub Actions ([windows.yml](.github/workflows/windows.yml)); nothing built on a personal machine is signed.
+
+**Privacy:** this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. The one exception is the update check: R-Browser downloads `latest.json` from this repository's GitHub Releases (subject to [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)). Websites you open, and the search engine you use (Google by default), get what any browser sends them.
 
 ## Build
 
