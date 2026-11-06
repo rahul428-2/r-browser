@@ -16,6 +16,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Rahul Varma",
+    "copyright": "Copyright (c) 2026 Rahul Varma. MPL-2.0.",
+    "homepage": "https://rahul428-2.github.io/r-browser/",
+    "category": "Productivity",
+    "shortDescription": "R-Browser - open-source, security-first web browser",
+    "longDescription": "R-Browser is an open-source, security-first desktop web browser built on the system web engine.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
