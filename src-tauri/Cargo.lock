@@ -3125,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "r-browser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "adblock",
  "aes-gcm",

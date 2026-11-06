@@ -602,7 +602,7 @@ fn start_blocker(app: &AppHandle) {
     use std::hash::{Hash, Hasher};
     let lists = blocker::bundled();
     let mut h = std::hash::DefaultHasher::new();
-    lists.hash(&mut h);
+    (blocker::FORMAT, &lists).hash(&mut h); // a new FORMAT recompiles lists that are already on disk
     let id = format!("rb-{:016x}", h.finish());
     let a = app.clone();
     platform::load_rules(app.clone(), id, move || blocker::Blocker::from_lists(&lists).webkit_rules_json(), move || {

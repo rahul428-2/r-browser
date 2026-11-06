@@ -30,8 +30,14 @@ pub fn error_page(url: &str, domain: &str, code: i64, desc: &str) -> Option<Stri
     if code == -999 || (domain == "WebKitErrorDomain" && code == 102) { return None; }
     let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| url.to_string());
     let (head, why) = reason(domain, code, &esc(&host));
-    let retry = if url.starts_with("https://") || url.starts_with("http://") {
-        format!("<a class=\"btn\" href=\"{}\">Try again</a>", esc(url))
+    let web = url.starts_with("https://") || url.starts_with("http://");
+    let retry = if web { format!("<a class=\"btn\" href=\"{}\">Try again</a>", esc(url)) } else { String::new() };
+    // Like Chrome: a connection error (offline, dropped, timed out) retries by itself once the network is back,
+    // and once right away if the Mac is already online (a blip, e.g. just after waking) — at most every 30 s.
+    let auto = if web && matches!(code, -1009 | -1005 | -1001) {
+        let u = serde_json::to_string(url).unwrap_or_default().replace('<', "\\u003c");
+        format!(r#"<script>(()=>{{const u={u},go=()=>location.replace(u);addEventListener("online",go);
+try{{const k="rb-retry",t=+sessionStorage.getItem(k)||0;if(navigator.onLine&&Date.now()-t>30000){{sessionStorage.setItem(k,Date.now());setTimeout(go,3000)}}}}catch{{}}}})()</script>"#)
     } else { String::new() };
     Some(format!(r#"<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="dark"><title>{t}</title>
 <style>html{{background:#070b14;color:#dce6f5;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}}
@@ -41,7 +47,7 @@ p{{color:#b9c6da;margin:0 0 22px}}b{{color:#dce6f5}}code{{color:#7d8ba3;font-siz
 .mark{{width:44px;height:44px;margin-bottom:20px;color:#f5b54a}}</style>
 <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M12 8v4M12 16h.01"/></svg>
 <h1>{h}</h1><p>{why}</p>{retry}
-<p style="margin-top:28px"><code>{u}<br>{d} {c}: {desc}</code></p>"#,
+<p style="margin-top:28px"><code>{u}<br>{d} {c}: {desc}</code></p>{auto}"#,
         t = esc(&head), h = esc(&head), u = esc(url), d = esc(domain), c = code, desc = esc(desc)))
 }
 
@@ -79,6 +85,13 @@ mod tests {
     fn cut_connection_mentions_network_blocking() {
         let p = error_page("https://www.minecraft.net/en-us", NS, -1005, "The network connection was lost.").unwrap();
         assert!(p.contains("blocking"), "{p}");
+    }
+
+    #[test]
+    fn connection_errors_retry_by_themselves() {
+        let p = error_page("https://www.youtube.com/watch?v=x</script>", NS, -1009, "The Internet connection appears to be offline.").unwrap();
+        assert!(p.contains("addEventListener(\"online\"") && !p.contains("x</script>"), "{p}");
+        assert!(!error_page("https://a.com/", NS, -1003, "").unwrap().contains("<script>")); // wrong address: retrying won't help
     }
 
     #[test]

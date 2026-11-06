@@ -4,6 +4,9 @@ use adblock::lists::{FilterSet, ParseOptions};
 use adblock::request::Request;
 use adblock::Engine;
 
+/// Bump when `webkit_rules_json` changes how it converts, so compiled lists cached on disk are rebuilt.
+pub const FORMAT: u32 = 2;
+
 pub struct Blocker {
     engine: Engine,
     lists: Vec<String>,
@@ -29,10 +32,37 @@ impl Blocker {
 
     /// The lists as a WebKit content-blocker rule list (WKContentRuleList / WebKitUserContentFilterStore).
     pub fn webkit_rules_json(&self) -> String {
-        let (mut rules, _) = filter_set(&self.lists, true).into_content_blocking().unwrap_or_default();
-        rules.push(adblock::content_blocking::ignore_previous_fp_documents());
-        serde_json::to_string(&rules).unwrap_or_else(|_| "[]".into())
+        use adblock::content_blocking::{CbAction, CbRule, CbTrigger, CbType};
+        let (rules, _) = filter_set(&self.lists, true).into_content_blocking().unwrap_or_default();
+        // The converter drops `@@||site^$generichide`, so generic hides ran everywhere — e.g. they hid images
+        // inside Gmail's emails. Generic hides go first, then "ignore previous rules" on the exempt sites.
+        let (mut out, rest): (Vec<CbRule>, Vec<CbRule>) =
+            rules.into_iter().partition(|r| r.action.typ == CbType::CssDisplayNone && r.trigger.if_domain.is_none());
+        let exempt = generichide_sites(&self.lists);
+        if !exempt.is_empty() {
+            out.push(CbRule {
+                action: CbAction { typ: CbType::IgnorePreviousRules, selector: None },
+                trigger: CbTrigger { url_filter: ".*".into(), if_domain: Some(exempt), ..CbTrigger::default() },
+            });
+        }
+        out.extend(rest);
+        out.push(adblock::content_blocking::ignore_previous_fp_documents());
+        serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
     }
+}
+
+/// Sites the lists exempt from generic element hiding (`@@||site^$generichide`), as WebKit `if-domain` entries.
+fn generichide_sites(lists: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = lists.iter().flat_map(|l| l.lines()).filter_map(|l| {
+        let (pat, opts) = l.trim().strip_prefix("@@||")?.split_once('$')?;
+        if !opts.split(',').any(|o| matches!(o, "generichide" | "ghide" | "elemhide" | "ehide")) { return None; }
+        let host = pat.split(['^', '/', '*', '|']).next()?.to_ascii_lowercase();
+        let ok = !host.is_empty() && !host.ends_with('.') && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+        ok.then(|| format!("*{host}"))
+    }).collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 /// The filter lists shipped inside the app (refresh with scripts/fetch_lists.sh).
@@ -84,6 +114,18 @@ mod tests {
     }
 
     #[test]
+    fn generichide_sites_skip_generic_hides() {
+        let json = b("##.ad-box\n@@||mail.google.com^$generichide\n@@||x.com/p$ghide,script\nsite.com##.own").webkit_rules_json();
+        let rules: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        let at = |f: &dyn Fn(&serde_json::Value) -> bool| rules.iter().position(|r| f(r)).unwrap();
+        let generic = at(&|r| r["action"]["selector"] == ".ad-box");
+        let exempt = at(&|r| r["trigger"]["if-domain"] == serde_json::json!(["*mail.google.com", "*x.com"]));
+        let own = at(&|r| r["action"]["selector"] == ".own");
+        assert_eq!(rules[exempt]["action"]["type"], "ignore-previous-rules");
+        assert!(generic < exempt && exempt < own, "{json}"); // site-specific hides still apply
+    }
+
+    #[test]
     fn webkit_json_is_valid_json_array() {
         let json = b("||ads.example^\n@@||ads.example/ok.js\nnews.com##.ad-box").webkit_rules_json();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -110,3 +152,4 @@ mod real_lists {
         println!("webkit {n} rules, {} KB, {:?}", j.len() / 1024, t.elapsed());
     }
 }
+
