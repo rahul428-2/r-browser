@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R-Browser: a lighter, safer browser</title>
+<meta name="description" content="R-Browser is a free, open-source desktop browser for Windows and macOS with built-in ad blocking, secure connections only, a lockdown for unknown sites, and about a third of Chrome's memory.">
+<meta property="og:title" content="R-Browser">
+<meta property="og:description" content="A free, open-source browser with built-in blocking and a third of Chrome's memory.">
+<meta property="og:image" content="https://rahul428-2.github.io/r-browser/og.jpg">
+<link rel="icon" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&display=swap" rel="stylesheet">
+<style>
+/* Tokens come from the app's own ui/style.css, so the page and the browser look like one product. */
+:root {
+  --abyss: #070b14;   /* page, and the tab strip in the app */
+  --hull: #111a2b;    /* toolbar + active tab */
+  --hull-hi: #1a263c;
+  --well: #0a101c;    /* inside the address field */
+  --line: #1f2c44;
+  --ice: #dce6f5;
+  --fog: #8a98b0;
+  --signal: #3b9eff;
+  --glint: #7fe3ff;
+  --amber: #f5b54a;   /* warnings only, as in the app */
+  --rb: #1a9fd0;      /* chart: R-Browser (validated pair, dark surface) */
+  --ch: #c77a3e;      /* chart: Chrome */
+  --page: #f2f5fa;    /* web page inside the mock window */
+}
+* { box-sizing: border-box; }
+html { background: var(--abyss); color-scheme: dark; scroll-behavior: smooth; overflow-x: clip; }
+body {
+  margin: 0; background: var(--abyss); color: var(--ice);
+  font: 400 1.0625rem/1.6 "Bricolage Grotesque", system-ui, sans-serif;
+  font-optical-sizing: auto; -webkit-font-smoothing: antialiased;
+}
+a { color: var(--signal); text-underline-offset: 3px; }
+a:hover { color: var(--glint); }
+:focus-visible { outline: 2px solid var(--glint); outline-offset: 3px; border-radius: 6px; }
+.wrap { width: min(70rem, 100% - 2rem); margin-inline: auto; }
+h1, h2, h3 { margin: 0; letter-spacing: -0.025em; line-height: 1.05; }
+h2 { font-size: clamp(1.75rem, 4vw, 2.6rem); font-weight: 750; }
+p { margin: 0 0 1rem; max-width: 38rem; }
+.quiet { color: var(--fog); }
+.skip { position: absolute; left: -999px; }
+.skip:focus { left: 1rem; top: 1rem; z-index: 9; background: var(--ice); color: var(--abyss); padding: .5rem 1rem; }
+
+/* top */
+.top { display: flex; align-items: center; justify-content: space-between; padding-block: 1.25rem; }
+.brand { display: flex; align-items: center; gap: .6rem; color: var(--ice); text-decoration: none; font-weight: 700; font-size: 1.125rem; }
+.brand img { width: 32px; height: 32px; }
+.top nav { display: flex; gap: 1.5rem; font-size: .95rem; }
+.top nav a { color: var(--fog); text-decoration: none; padding-block: .5rem; }
+.top nav a:hover { color: var(--ice); }
+
+/* hero */
+.hero { padding-top: clamp(2.5rem, 7vw, 5rem); display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 1.5rem 3rem; }
+.hero h1 { font-size: clamp(2.6rem, 6.4vw, 5.2rem); font-weight: 780; max-width: 15ch; }
+.hero .lede { grid-column: 1; font-size: clamp(1.1rem, 2vw, 1.3rem); color: var(--fog); margin: 0; max-width: 33rem; }
+.get-wrap { grid-column: 2; grid-row: 1 / span 2; align-self: end; display: grid; gap: .75rem; justify-items: start; }
+.btn {
+  display: inline-flex; flex-direction: column; gap: .15rem; padding: 1rem 1.6rem; border-radius: 14px;
+  background: var(--ice); color: var(--abyss); text-decoration: none; font-weight: 720; font-size: 1.2rem; line-height: 1.2;
+  box-shadow: 0 10px 44px -10px color-mix(in srgb, var(--glint) 60%, transparent);
+}
+.btn small { font-weight: 450; font-size: .82rem; color: #3a4760; }
+.btn:hover { background: #fff; color: var(--abyss); }
+.msg { margin: 0; color: var(--fog); font-size: .92rem; max-width: 19rem; }
+
+/* ---------- the browser window (the demo) ---------- */
+.demo { margin-top: clamp(2.5rem, 6vw, 4rem); }
+.win {
+  border-radius: 14px; overflow: hidden; background: var(--abyss);
+  box-shadow: 0 0 0 1px #24324c, 0 40px 120px -30px #000, 0 0 80px -40px var(--signal);
+}
+.strip { display: flex; align-items: flex-end; height: 44px; padding: 0 8px 0 12px; gap: 2px; }
+.lights { display: flex; gap: 8px; align-self: center; margin-right: 14px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; background: #2a3650; }
+.tabs { display: flex; min-width: 0; flex: 1; gap: 2px; }
+.tab {
+  all: unset; box-sizing: border-box; position: relative; display: flex; align-items: center; gap: 8px;
+  height: 36px; min-width: 0; flex: 0 1 210px; padding: 0 12px; border-radius: 10px 10px 0 0;
+  color: var(--fog); font: 450 .875rem/1 system-ui, -apple-system, "Segoe UI", sans-serif; cursor: pointer;
+}
+.tab:hover { background: #0d1422; color: var(--ice); }
+.tab[aria-selected="true"] { background: var(--hull); color: var(--ice); }
+.tab:focus-visible { outline: 2px solid var(--glint); outline-offset: -2px; border-radius: 10px 10px 0 0; }
+.tab svg, .tab img { width: 16px; height: 16px; flex: none; }
+.tab .t { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tab.asleep svg, .tab.asleep .t { opacity: .45; }
+.bar { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 12px; background: var(--hull); }
+.navs { display: flex; gap: 4px; color: #5b6880; }
+.navs svg { width: 18px; height: 18px; }
+.omni { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px; border-radius: 18px; background: var(--well); border: 1px solid #1d2a42; }
+.chip { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 7px; border-radius: 12px; color: var(--signal); background: #3b9eff1a; font: 600 .75rem/1 system-ui, sans-serif; }
+.chip svg { width: 15px; height: 15px; }
+.chip.none { color: var(--fog); background: none; }
+.url { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--fog); font: 15px/1 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.url b { color: var(--ice); font-weight: 500; }
+.unv { display: flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 7px; border-radius: 12px; background: #f5b54a1f; color: var(--amber); font: 600 .75rem/1 system-ui, sans-serif; white-space: nowrap; transition: background .4s, color .4s; }
+.unv svg { width: 13px; height: 13px; }
+.unv.checked { background: #7d8ba31f; color: var(--fog); }
+.unv[hidden], .unv.checked svg { display: none; }
+.guard { height: 2px; background: linear-gradient(90deg, transparent, var(--signal), transparent); opacity: .5; }
+
+.view { position: relative; height: clamp(22rem, 46vw, 30rem); overflow: hidden; }
+.panel { position: absolute; inset: 0; }
+.panel[hidden] { display: none; }
+
+/* new tab: the app's real new-tab page */
+.p-new { background: var(--abyss); display: grid; place-content: center; justify-items: center; gap: 1.25rem; padding: 1rem; }
+.p-new img { width: min(15rem, 50vw); height: auto; mix-blend-mode: screen; margin-bottom: -1.5rem; }
+.search { width: min(34rem, 80vw); height: 46px; border-radius: 23px; background: var(--hull); border: 1px solid #24324c; display: flex; align-items: center; gap: 10px; padding: 0 18px; color: var(--fog); font: 15px system-ui, sans-serif; }
+.search svg { width: 17px; height: 17px; }
+
+/* a web page inside the window */
+.site { background: var(--page); color: #1b2333; height: 100%; padding: clamp(1rem, 3vw, 2rem) clamp(1rem, 4vw, 3rem); font-family: Georgia, "Times New Roman", serif; }
+.site .mast { font: 700 clamp(1.1rem, 2.5vw, 1.6rem)/1 Georgia, serif; border-bottom: 2px solid #1b2333; padding-bottom: .6rem; margin-bottom: 1rem; }
+.cols { display: grid; grid-template-columns: 1fr 15rem; gap: 1.5rem; }
+.story h3 { font: 700 clamp(1.05rem, 2.2vw, 1.45rem)/1.2 Georgia, serif; letter-spacing: 0; margin-bottom: .6rem; }
+.lines i { display: block; height: 9px; border-radius: 5px; background: #d5dbe6; margin: 0 0 9px; }
+.lines i:nth-child(3n) { width: 82%; }
+.lines i:nth-child(4n) { width: 91%; }
+.blocked { display: grid; place-content: center; text-align: center; gap: .2rem; border: 1.5px dashed #b9c3d3; border-radius: 10px; color: #64708a; font: 500 .8rem/1.3 system-ui, sans-serif; padding: .8rem; }
+.blocked.tall { height: 13rem; }
+.blocked.wide { height: 4.2rem; margin-top: 1rem; }
+.blocked svg { width: 18px; height: 18px; margin: 0 auto; color: #3b9eff; }
+
+/* unknown site in lockdown */
+.p-unknown .site { font-family: system-ui, sans-serif; }
+.shop { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1rem; opacity: .9; }
+.shop i { display: block; aspect-ratio: 4 / 3; border-radius: 10px; background: #dfe4ee; }
+.check {
+  position: absolute; right: clamp(.75rem, 2vw, 1.5rem); top: clamp(.75rem, 2vw, 1.5rem); width: min(21rem, calc(100% - 1.5rem));
+  background: var(--hull); color: var(--ice); border-radius: 14px; padding: 1rem 1.1rem; font: 400 .88rem/1.45 system-ui, sans-serif;
+  box-shadow: 0 0 0 1px #2a3a58, 0 20px 50px -15px #000a;
+}
+.check h3 { font: 650 .95rem/1.3 system-ui, sans-serif; letter-spacing: 0; margin-bottom: .35rem; display: flex; align-items: center; gap: .45rem; }
+.check h3 svg { width: 16px; height: 16px; color: var(--amber); }
+.check .off { color: var(--fog); margin: 0 0 .7rem; }
+.check ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+.check li { display: flex; gap: .5rem; align-items: center; color: var(--fog); }
+.check li::before { content: ""; width: 14px; height: 14px; flex: none; border-radius: 50%; border: 2px solid #3a4a68; }
+.check li.ok { color: var(--ice); }
+.check li.ok::before { border-color: var(--glint); background: var(--glint) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='%23070b14' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 12px no-repeat; }
+.check .done { margin: .7rem 0 0; color: var(--glint); font-weight: 600; }
+
+/* sleeping tab */
+.p-sleep { background: var(--abyss); display: grid; place-content: center; justify-items: center; text-align: center; gap: .9rem; padding: 1.5rem; }
+.p-sleep svg { width: 40px; height: 40px; color: var(--fog); }
+.p-sleep p { margin: 0; color: var(--fog); max-width: 26rem; font: .95rem/1.5 system-ui, sans-serif; }
+.p-sleep strong { color: var(--ice); font: 600 1.05rem system-ui, sans-serif; }
+.wake { all: unset; cursor: pointer; padding: .6rem 1.2rem; border-radius: 10px; background: var(--ice); color: var(--abyss); font: 650 .9rem system-ui, sans-serif; }
+.wake:hover { background: #fff; }
+.wake:focus-visible { outline: 2px solid var(--glint); outline-offset: 3px; }
+
+/* caption under the window, driven by the selected tab */
+.caption { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem 2rem; margin-top: 1.5rem; align-items: start; }
+.caption h3 { font-size: 1.35rem; font-weight: 700; margin-bottom: .35rem; letter-spacing: -0.01em; }
+.caption p { color: var(--fog); margin: 0; }
+.hint { color: var(--fog); font-size: .9rem; white-space: nowrap; }
+.platform { margin-top: 1.5rem; padding-left: 1rem; border-left: 3px solid var(--amber); color: var(--fog); font-size: .95rem; }
+.platform b { color: var(--ice); font-weight: 650; }
+
+/* ---------- memory ---------- */
+section.block { padding-block: clamp(3.5rem, 8vw, 6rem); }
+.memory { border-top: 1px solid var(--line); margin-top: clamp(3rem, 7vw, 5rem); }
+.legend { display: flex; gap: 1.25rem; margin: 1.5rem 0 0; padding: 0; list-style: none; font-size: .95rem; }
+.legend li { display: flex; align-items: center; gap: .5rem; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; }
+.charts { display: grid; grid-template-columns: 3fr 2fr; gap: 2.5rem 4rem; margin-top: 2rem; }
+.chart h3 { font-size: 1.05rem; font-weight: 650; letter-spacing: 0; margin-bottom: 1rem; }
+.chart h3 span { color: var(--fog); font-weight: 400; }
+.row { display: grid; grid-template-columns: 6.5rem 1fr; align-items: center; gap: .75rem; padding-block: .45rem; position: relative; }
+.row .name { color: var(--fog); font-size: .95rem; }
+.plot { display: flex; align-items: center; gap: .6rem; min-width: 0; border-left: 1px solid #33415c; padding-block: 4px; }
+.mark { height: 22px; border-radius: 0 4px 4px 0; transform-origin: left; animation: grow 1.2s cubic-bezier(.2,.7,.1,1) both; }
+.mark.rb { background: var(--rb); }
+.mark.ch { background: var(--ch); animation-delay: .12s; }
+.val { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 1.15rem; white-space: nowrap; }
+@keyframes grow { from { transform: scaleX(0); } }
+.tip { position: absolute; left: 7.25rem; bottom: calc(100% - .2rem); z-index: 2; background: var(--ice); color: var(--abyss); font-size: .85rem; line-height: 1.35; padding: .45rem .65rem; border-radius: 8px; max-width: calc(100% - 7.25rem); width: max-content; pointer-events: none; opacity: 0; transition: opacity .12s; }
+.row:hover .tip, .row:focus-visible .tip { opacity: 1; }
+.row:focus-visible { outline-offset: 0; }
+.takeaway { font-size: clamp(1.25rem, 2.6vw, 1.6rem); font-weight: 650; letter-spacing: -0.01em; margin-top: 2.5rem; max-width: 40rem; line-height: 1.3; }
+details { margin-top: 1.25rem; color: var(--fog); font-size: .95rem; }
+summary { cursor: pointer; color: var(--signal); width: fit-content; }
+table { border-collapse: collapse; margin-top: .75rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: .4rem 1.5rem .4rem 0; border-bottom: 1px solid var(--line); }
+th { color: var(--ice); font-weight: 600; }
+
+/* ---------- install + policy ---------- */
+.install { border-top: 1px solid var(--line); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 2rem 4rem; margin-top: 2rem; }
+.two h3 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; margin-bottom: .6rem; }
+.two p, .two li { color: var(--fog); }
+.two ol { margin: 0; padding-left: 1.2rem; }
+.two li { margin-bottom: .35rem; }
+kbd { font: inherit; font-weight: 650; color: var(--ice); }
+.policy { border-top: 1px solid var(--line); }
+.policy h2 { font-size: clamp(1.4rem, 3vw, 1.8rem); margin-bottom: 1rem; }
+.policy ul { padding-left: 1.1rem; margin: 0 0 1rem; color: var(--fog); }
+.policy p { color: var(--fog); }
+.policy b { color: var(--ice); font-weight: 600; }
+footer { border-top: 1px solid var(--line); padding-block: 2rem 3rem; color: var(--fog); font-size: .9rem; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; }
+footer p { margin: 0; }
+
+@media (max-width: 760px) {
+  .hero { grid-template-columns: 1fr; }
+  .get-wrap { grid-column: 1; grid-row: auto; }
+  .top nav .opt { display: none; }
+  .lights, .navs { display: none; }
+  .tab { flex: 1 1 0; justify-content: center; padding: 0 8px; }
+  .tab .t { display: none; }
+  .url span { display: none; }
+  .cols { grid-template-columns: 1fr; }
+  .blocked.tall { display: none; }
+  .check { left: .75rem; right: .75rem; width: auto; top: auto; bottom: .75rem; }
+  .shop { grid-template-columns: repeat(2, 1fr); }
+  .caption { grid-template-columns: 1fr; }
+  .charts { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .mark { animation: none; }
+  .unv { transition: none; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="./"><img src="icon.png" alt="">R-Browser</a>
+    <nav aria-label="Page">
+      <a class="opt" href="#memory">Memory</a>
+      <a class="opt" href="#install">Install</a>
+      <a href="https://github.com/rahul428-2/r-browser">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <h1>The browser that keeps watch.</h1>
+      <p class="lede">Ads and trackers blocked, secure connections only, and a lockdown for sites it doesn't know. All while using about a third of Chrome's memory.</p>
+      <div class="get-wrap">
+        <a class="btn" id="get" href="#install">Download R-Browser<small>Free for Windows and macOS</small></a>
+        <p class="msg" id="msg" role="status"></p>
+      </div>
+    </section>
+
+    <!-- A working miniature of the real window: tabs switch, the check runs, the sleeping tab wakes. -->
+    <section class="demo" aria-label="Try R-Browser">
+      <div class="win">
+        <div class="strip">
+          <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+          <div class="tabs" role="tablist" aria-label="Demo tabs">
+            <button class="tab" role="tab" id="t-new" aria-controls="p-new" aria-selected="true">
+              <img src="icon.png" alt=""><span class="t">New tab</span></button>
+            <button class="tab" role="tab" id="t-news" aria-controls="p-news" aria-selected="false" tabindex="-1">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="#c0392b"/><path d="M5 11V5l6 6V5" stroke="#fff" stroke-width="1.6" fill="none"/></svg><span class="t">The Daily Ledger</span></button>
+            <button class="tab" role="tab" id="t-unknown" aria-controls="p-unknown" aria-selected="false" tabindex="-1">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.8 8h12.4M8 1.7c2 2.2 2 10.4 0 12.6M8 1.7c-2 2.2-2 10.4 0 12.6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg><span class="t">mega-deals-4u.shop</span></button>
+            <button class="tab asleep" role="tab" id="t-sleep" aria-controls="p-sleep" aria-selected="false" tabindex="-1">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="3" fill="#2f6fd6"/><path d="M4.5 5h7M4.5 8h7M4.5 11h4.5" stroke="#fff" stroke-width="1.4"/></svg><span class="t">Project notes</span></button>
+          </div>
+        </div>
+        <div class="bar">
+          <div class="navs" aria-hidden="true">
+            <svg viewBox="0 0 20 20"><path d="M12 4l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg viewBox="0 0 20 20"><path d="M8 4l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="omni" aria-hidden="true">
+            <span class="chip" id="chip"></span>
+            <span class="url" id="url"></span>
+            <span class="unv" id="unv" hidden><svg viewBox="0 0 16 16"><path d="M8 1.8l6.5 11.4H1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.3v3.2M8 11.3v.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span id="unv-t">Unverified</span></span>
+          </div>
+        </div>
+        <div class="guard" aria-hidden="true"></div>
+
+        <div class="view">
+          <div class="panel p-new" role="tabpanel" id="p-new" aria-labelledby="t-new">
+            <img src="wolf.jpg" alt="" width="1100" height="733">
+            <div class="search" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M13 13l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Search Google or type an address</div>
+          </div>
+
+          <div class="panel p-news" role="tabpanel" id="p-news" aria-labelledby="t-news" hidden>
+            <div class="site">
+              <div class="mast">The Daily Ledger</div>
+              <div class="blocked wide"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2l6.5 2.5v5c0 4-2.8 6.9-6.5 8.5C6.3 16.4 3.5 13.5 3.5 9.5v-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>Banner ad blocked</div>
+              <div class="cols" style="margin-top:1.25rem">
+                <div class="story">
+                  <h3>City council approves new cycle lanes after a year of debate</h3>
+                  <div class="lines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                </div>
+                <div class="blocked tall"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2l6.5 2.5v5c0 4-2.8 6.9-6.5 8.5C6.3 16.4 3.5 13.5 3.5 9.5v-5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>Video ad and 4 trackers blocked</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel p-unknown" role="tabpanel" id="p-unknown" aria-labelledby="t-unknown" hidden>
+            <div class="site">
+              <div class="mast" style="font-family:system-ui,sans-serif">MEGA DEALS 4U</div>
+              <div class="shop" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            </div>
+            <div class="check" aria-live="polite">
+              <h3><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l5.5 2v4.2c0 3.3-2.3 5.8-5.5 6.8-3.2-1-5.5-3.5-5.5-6.8V3.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>Opened in lockdown</h3>
+              <p class="off">JIT, WebAssembly, WebGL and WebRTC are off until this site passes a one-time check.</p>
+              <ul id="steps">
+                <li>Secure connection</li>
+                <li>Name isn't a look-alike of a famous site</li>
+                <li>Not on a malware or crypto-miner list</li>
+                <li>No pop-up or redirect tricks in 30 seconds</li>
+              </ul>
+              <p class="done" id="done" hidden>Check passed. Now running at full speed.</p>
+            </div>
+          </div>
+
+          <div class="panel p-sleep" role="tabpanel" id="p-sleep" aria-labelledby="t-sleep" hidden>
+            <svg viewBox="0 0 40 40" aria-hidden="true"><path d="M27 26.5A12 12 0 0 1 15.5 9a12 12 0 1 0 15.6 15.3 12 12 0 0 1-4.1 2.2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            <strong id="sleep-h">This tab is asleep</strong>
+            <p id="sleep-p">Nobody looked at it for five minutes, so R-Browser gave its memory back to your computer.</p>
+            <button class="wake" id="wake">Wake tab</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="caption">
+        <div aria-live="polite">
+          <h3 id="cap-h">Click a tab to see what R-Browser does</h3>
+          <p id="cap-p">This is a working miniature of the real window. Each tab shows one thing it does for you.</p>
+        </div>
+        <span class="hint" aria-hidden="true">Click the tabs above</span>
+      </div>
+      <p class="platform"><b>On Windows, some of this is still being built.</b> Ad blocking, secure-connections-only and lockdown work on macOS today. The Windows version has the tabs, sleeping tabs, password manager and automatic updates now, and the rest is in progress.</p>
+    </section>
+
+    <section class="block memory" id="memory">
+      <h2>Twenty tabs, a third of the memory</h2>
+      <p class="quiet">The same 20 real websites open in both browsers, measured after six minutes on a MacBook with Apple silicon.</p>
+      <ul class="legend" aria-hidden="true"><li><i style="background:var(--rb)"></i>R-Browser</li><li><i style="background:var(--ch)"></i>Chrome</li></ul>
+      <div class="charts">
+        <figure class="chart" style="margin:0">
+          <h3>Memory <span>(MB, lower is better)</span></h3>
+          <div class="row" tabindex="0" aria-label="R-Browser memory: 1,276 MB">
+            <span class="name">R-Browser</span>
+            <div class="plot"><i class="mark rb" style="width:29.7%"></i><span class="val">1,276</span></div>
+            <span class="tip">R-Browser: 1,276 MB across 12 processes</span>
+          </div>
+          <div class="row" tabindex="0" aria-label="Chrome memory: 3,780 MB">
+            <span class="name">Chrome</span>
+            <div class="plot"><i class="mark ch" style="width:88%"></i><span class="val">3,780</span></div>
+            <span class="tip">Chrome: 3,780 MB across 63 processes</span>
+          </div>
+        </figure>
+        <figure class="chart" style="margin:0">
+          <h3>CPU <span>(% while idle, lower is better)</span></h3>
+          <div class="row" tabindex="0" aria-label="R-Browser CPU: 2.4 percent">
+            <span class="name">R-Browser</span>
+            <div class="plot"><i class="mark rb" style="width:8%"></i><span class="val">2.4%</span></div>
+            <span class="tip">R-Browser: 2.4% average CPU</span>
+          </div>
+          <div class="row" tabindex="0" aria-label="Chrome CPU: 23.3 percent">
+            <span class="name">Chrome</span>
+            <div class="plot"><i class="mark ch" style="width:78%"></i><span class="val">23.3%</span></div>
+            <span class="tip">Chrome: 23.3% average CPU</span>
+          </div>
+        </figure>
+      </div>
+      <p class="takeaway">66% less memory and about a tenth of the CPU, so your fan stays quiet and your battery lasts longer.</p>
+      <details>
+        <summary>Show the numbers as a table</summary>
+        <table>
+          <thead><tr><th scope="col">Browser</th><th scope="col">Memory</th><th scope="col">CPU</th><th scope="col">Processes</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">R-Browser</th><td>1,276 MB</td><td>2.4%</td><td>12</td></tr>
+            <tr><th scope="row">Chrome</th><td>3,780 MB</td><td>23.3%</td><td>63</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-top:.75rem">Measured with <a href="https://github.com/rahul428-2/r-browser/tree/main/bench">bench.py</a>, which you can run yourself.</p>
+      </details>
+    </section>
+
+    <section class="block install" id="install">
+      <h2>Installing</h2>
+      <p class="quiet">Version 0.1.0, free and open source under the Mozilla Public License 2.0. The download button picks the right file for your computer.</p>
+      <div class="two">
+        <div>
+          <h3>Windows 10 and 11</h3>
+          <ol>
+            <li>Run <kbd>R-Browser-Windows-Setup.exe</kbd> (4.8 MB).</li>
+            <li>If Windows says "Windows protected your PC", choose <kbd>More info</kbd>, then <kbd>Run anyway</kbd>. This goes away once the installer is code-signed.</li>
+          </ol>
+        </div>
+        <div>
+          <h3>macOS 13 or later, Apple silicon</h3>
+          <ol>
+            <li>Unpack <kbd>R-Browser.app.tar.gz</kbd> (7.2 MB) and move R-Browser to Applications.</li>
+            <li>The first time, right-click R-Browser and choose <kbd>Open</kbd>, because the app isn't notarized yet.</li>
+          </ol>
+        </div>
+      </div>
+      <p class="quiet" style="margin-top:2rem">Both update themselves after that. Linux is planned. Older versions are on the <a href="https://github.com/rahul428-2/r-browser/releases">releases page</a>.</p>
+    </section>
+
+    <section class="block policy two" id="code-signing" style="margin-top:0">
+      <div>
+        <h2>Code signing policy</h2>
+        <p>Free code signing provided by <a href="https://about.signpath.io">SignPath.io</a>, certificate by <a href="https://signpath.org">SignPath Foundation</a>. Windows installers will carry the signature once the project is approved.</p>
+        <ul>
+          <li><b>Committers and reviewers:</b> <a href="https://github.com/rahul428-2">rahul428-2</a></li>
+          <li><b>Approvers:</b> <a href="https://github.com/rahul428-2">rahul428-2</a></li>
+        </ul>
+        <p>Every signed file is built from the <a href="https://github.com/rahul428-2/r-browser">public repository</a> by GitHub Actions. Nothing built on a personal machine is signed.</p>
+      </div>
+      <div id="privacy">
+        <h2>Privacy</h2>
+        <p>This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.</p>
+        <p>The one automatic connection is the update check, which downloads a small file from this project's GitHub releases (see <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub's privacy statement</a>). Websites you visit, and the search engine you use (Google by default), receive what any browser sends them.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>R-Browser is open source under <a href="https://github.com/rahul428-2/r-browser/blob/main/LICENSE">MPL-2.0</a>.</p>
+    <p><a href="https://github.com/rahul428-2/r-browser">Source code</a> &nbsp; <a href="https://github.com/rahul428-2/r-browser/issues">Report a problem</a></p>
+  </footer>
+</div>
+
+<script>
+// ---- one download button: detect the OS on click, download that installer ----
+(function () {
+  var base = 'https://github.com/rahul428-2/r-browser/releases/latest/download/';
+  var files = { win: base + 'R-Browser-Windows-Setup.exe', mac: base + 'R-Browser.app.tar.gz' };
+  function detect() {
+    var d = navigator.userAgentData, p = (d && d.platform) || navigator.platform || '', ua = navigator.userAgent;
+    if ((d && d.mobile) || /Android|iPhone|iPad|iPod/i.test(ua)) return null;
+    if (/Win/i.test(p) || /Windows/.test(ua)) return 'win';
+    if (/Mac/i.test(p) || /Macintosh/.test(ua)) return navigator.maxTouchPoints > 1 ? null : 'mac'; // iPads report as Mac
+    return null;
+  }
+  var msg = document.getElementById('msg');
+  document.getElementById('get').addEventListener('click', function (e) {
+    e.preventDefault();
+    var os = detect();
+    if (os) location.href = files[os];
+    msg.textContent = os === 'win' ? 'Downloading for Windows. If SmartScreen warns you, choose More info, then Run anyway.'
+      : os === 'mac' ? 'Downloading for Mac. Unpack it, move R-Browser to Applications, then right-click it and choose Open.'
+      : 'R-Browser runs on Windows and Mac computers. Open this page on one of them to download it.';
+  });
+})();
+
+// ---- the demo window ----
+(function () {
+  var shield = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l5.5 2v4.2c0 3.3-2.3 5.8-5.5 6.8-3.2-1-5.5-3.5-5.5-6.8V3.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+  var lock = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 015 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+  var search = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.3 10.3l3.2 3.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+  var S = {
+    new: { chip: search, cls: 'chip none', url: '', unv: false,
+      h: 'Click a tab to see what R-Browser does', p: 'This is a working miniature of the real window. Each tab shows one thing it does for you.' },
+    news: { chip: shield + '23', cls: 'chip', url: 'dailyledger.example<span>/city/cycle-lanes</span>', unv: false,
+      h: 'Ads and trackers never load', p: 'Blocking is built into the browser, not added as an extension, using EasyList, EasyPrivacy and Peter Lowe’s list. The shield shows how many were blocked. Click it to switch blocking off for a site.' },
+    unknown: { chip: lock, cls: 'chip', url: 'mega-deals-4u.shop<span>/flash-sale</span>', unv: true,
+      h: 'Unknown sites open in lockdown', p: 'Sites outside the 10,000 most visited get an Unverified badge and open with the riskiest features switched off. After a one-time check passes, they run at full speed. You can also trust a site yourself from the badge.' },
+    sleep: { chip: lock, cls: 'chip', url: 'notes.example<span>/project</span>', unv: false,
+      h: 'Idle tabs give their memory back', p: 'Tabs you haven’t looked at for five minutes go to sleep and wake up where you left them. Tabs playing audio or holding a half-typed form are never put to sleep.' }
+  };
+  var tabs = [].slice.call(document.querySelectorAll('.tab')), chip = document.getElementById('chip'), url = document.getElementById('url'),
+      unv = document.getElementById('unv'), unvT = document.getElementById('unv-t'), capH = document.getElementById('cap-h'), capP = document.getElementById('cap-p');
+  var steps = [].slice.call(document.querySelectorAll('#steps li')), done = document.getElementById('done'), timers = [];
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function runCheck() {
+    timers.forEach(clearTimeout); timers = [];
+    steps.forEach(function (s) { s.className = ''; }); done.hidden = true; unv.classList.remove('checked'); unvT.textContent = 'Unverified';
+    var gap = reduce ? 0 : 650;
+    steps.forEach(function (s, i) { timers.push(setTimeout(function () { s.className = 'ok'; }, gap * (i + 1))); });
+    timers.push(setTimeout(function () { done.hidden = false; unv.classList.add('checked'); unvT.textContent = 'Checked'; }, gap * (steps.length + 1)));
+  }
+
+  function select(tab, focus) {
+    var key = tab.id.slice(2), s = S[key];
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute('aria-selected', on); t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+    chip.className = s.cls; chip.innerHTML = s.chip;
+    url.innerHTML = s.url ? '<b>' + s.url.replace('<span>', '</b><span>') : 'Search Google or type an address';
+    unv.hidden = !s.unv;
+    capH.textContent = s.h; capP.textContent = s.p;
+    if (key === 'unknown') runCheck(); else timers.forEach(clearTimeout);
+    if (focus) tab.focus();
+  }
+
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { select(t); });
+    t.addEventListener('keydown', function (e) {
+      var n = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+      if (n === undefined) return;
+      e.preventDefault(); select(tabs[(n + tabs.length) % tabs.length], true);
+    });
+  });
+
+  var tabSleep = document.getElementById('t-sleep'), wake = document.getElementById('wake');
+  wake.addEventListener('click', function () {
+    var asleep = tabSleep.classList.toggle('asleep');
+    document.getElementById('sleep-h').textContent = asleep ? 'This tab is asleep' : 'Awake, right where you left off';
+    document.getElementById('sleep-p').textContent = asleep
+      ? 'Nobody looked at it for five minutes, so R-Browser gave its memory back to your computer.'
+      : 'Same page, same scroll position, same zoom. It will sleep again after five idle minutes.';
+    wake.textContent = asleep ? 'Wake tab' : 'Put it back to sleep';
+  });
+
+  select(tabs[0]);
+})();
+</script>
+</body>
+</html>

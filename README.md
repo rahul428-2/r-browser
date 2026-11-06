@@ -2,6 +2,8 @@
 
 # R-Browser
 
+**[rahul428-2.github.io/r-browser](https://rahul428-2.github.io/r-browser/)**
+
 A security-first, lightweight desktop browser. No Chromium: built on [Tauri](https://tauri.app) and the web engine your OS already ships (WebKit on macOS).
 
 ## What it does
