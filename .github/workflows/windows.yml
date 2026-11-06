@@ -1,8 +1,11 @@
 # Builds the Windows installer (NSIS .exe) on GitHub's Windows runner and, if a release tag is given,
-# attaches it to that release. The updater signature is made on the maintainer's Mac afterwards, so the
+# attaches it to that release. A pushed v* tag builds and attaches to a DRAFT release (created if missing),
+# so public download links don't move until the maintainer publishes it. The updater signature is made on the maintainer's Mac afterwards, so the
 # signing key never leaves it.
 name: windows
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -36,12 +39,13 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
       - name: Attach to release
-        if: inputs.tag != ''
+        if: inputs.tag != '' || github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         # Versioned name for the updater + a fixed name so the README's "latest/download" link never breaks.
         run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "$TAG" --notes "R-Browser $TAG"
           cp target/release/bundle/nsis/*.exe R-Browser-Windows-Setup.exe
           cp target/release/bundle/msi/*.msi R-Browser-Windows.msi
           gh release upload "$TAG" target/release/bundle/nsis/*.exe target/release/bundle/msi/*.msi R-Browser-Windows-Setup.exe R-Browser-Windows.msi --clobber
