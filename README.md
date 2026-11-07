@@ -11,7 +11,7 @@ A security-first, lightweight desktop browser. No Chromium: built on [Tauri](htt
 - **Built-in ad, tracker and pop-up blocking** (EasyList, EasyPrivacy, Peter Lowe), switchable per site.
 - **HTTPS-only**: plain-http addresses are upgraded; if a site has no secure version you're asked first.
 - **Unverified-site warnings**: sites outside the top 10,000 get an "Unverified" badge and open in a locked-down mode (no JIT, WebAssembly, WebGL or WebRTC) until a one-time safety check passes.
-- **Idle tab freezing**: background tabs idle for 5 minutes are unloaded to free memory (never the one playing audio or with a half-typed form).
+- **Background tabs on low resources**: tabs you aren't looking at stay loaded (never put to sleep) but run at background priority on macOS and with a low memory target on Windows; a tab playing sound keeps normal priority.
 - **Password manager**: AES-256-GCM vault, key in the system keychain, Touch ID unlock, Google Passwords CSV import.
 - Tabs, tab groups, drag/tear-off windows, incognito, bookmarks, history, downloads, session restore.
 - **Signed auto-updates** from this repo's releases.

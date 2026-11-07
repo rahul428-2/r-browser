@@ -1,5 +1,5 @@
-// R-Browser: tells the browser what it needs to decide whether this tab may be frozen when idle —
-// a half-typed form or playing sound keeps it alive — and where it was scrolled, to restore after a freeze.
+// R-Browser: tells the browser whether this tab is playing sound (a background tab playing sound keeps normal
+// priority), whether a form is half-typed, and where it was scrolled (restored when a saved session reopens).
 (() => {
   if (window.top !== window || !/^https?:$/.test(location.protocol)) return;
   const send = (ev) => { try { window.__TAURI_INTERNALS__.invoke("page_event", { ev }); } catch {} };

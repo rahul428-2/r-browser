@@ -10,6 +10,9 @@
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "core:window:allow-close",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-minimize",
     "allow-ui-ready",
     "allow-new-tab",
     "allow-new-incognito-window",

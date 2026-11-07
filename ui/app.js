@@ -3,6 +3,22 @@ const me = window.__TAURI__.webview.getCurrentWebview(); // events targeted at t
 const myWindow = window.__TAURI__.window.getCurrentWindow().label;
 const $ = (id) => document.getElementById(id);
 if (navigator.userAgent.includes("Mac")) document.body.classList.add("mac");
+// Windows: frameless window, so the strip carries minimize / maximize / close. Double-clicking the strip maximizes (Tauri's drag region).
+if (navigator.userAgent.includes("Windows")) {
+  const w = window.__TAURI__.window.getCurrentWindow();
+  document.body.classList.add("win", "focused");
+  $("caption").hidden = false;
+  $("wmin").onclick = () => w.minimize();
+  $("wmax").onclick = () => w.toggleMaximize();
+  $("wclose").onclick = () => w.close();
+  const sync = async () => {
+    const m = await w.isMaximized();
+    document.body.classList.toggle("maxed", m);
+    $("wmax").title = $("wmax").ariaLabel = m ? "Restore" : "Maximize";
+  };
+  w.onResized(sync); sync();
+  w.onFocusChanged(({ payload }) => document.body.classList.toggle("focused", payload));
+}
 const incognito = myWindow.startsWith("incognito-");
 if (incognito) document.body.classList.add("incognito");
 
@@ -414,16 +430,24 @@ $("findq").addEventListener("keydown", (e) => {
 
 // ---- download notice ----
 let toastTimer;
+// "3 min left" / "12 s left"; shared wording with the Downloads page.
+const left = (s) => s == null ? "" : s < 60 ? `${s} s left` : s < 3600 ? `${Math.round(s / 60)} min left` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min left`;
+const mb = (b) => b < 1e6 ? `${Math.round(b / 1e3)} KB` : b < 1e9 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e9).toFixed(2)} GB`;
 me.listen("download", (e) => {
-  const [win, name, status] = e.payload;
+  const [win, name, status, got, pct, eta] = e.payload;
   if (win !== myWindow) return;
   const t = $("toast");
   t.hidden = false;
   t.classList.toggle("failed", status === "failed");
+  t.classList.toggle("live", status === "progress" && pct != null);
+  if (pct != null) t.style.setProperty("--p", `${pct}%`);
   t.querySelector("span").textContent =
-    status === "started" ? `Downloading ${name}` : status === "done" ? `Downloaded ${name}` : `Download failed: ${name}`;
+    status === "started" ? `Downloading ${name}`
+    : status === "progress" ? [`${name}`, pct != null ? `${pct}%` : mb(got), left(eta)].filter(Boolean).join(" · ")
+    : status === "done" ? `Downloaded ${name}` : `Download failed: ${name}`;
+  t.title = t.querySelector("span").textContent;
   clearTimeout(toastTimer);
-  if (status !== "started") toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
+  if (status === "done" || status === "failed") toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
 });
 $("toast").onclick = () => invoke("new_tab", { url: "rb://downloads" });
 

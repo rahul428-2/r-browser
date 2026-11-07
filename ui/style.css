@@ -30,6 +30,21 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--signal); ou
 /* ---------- tab strip ---------- */
 #strip { height: var(--strip-h); display: flex; align-items: flex-end; padding: 0 8px; }
 body.mac #strip { padding-left: 80px; }
+/* Windows: the strip is the title bar. Caption buttons sit flush top-right like every Windows app (46 x 36). */
+body.win #strip { padding-right: 0; }
+body.win #caption { display: flex; align-self: flex-start; margin-left: auto; height: var(--strip-h); }
+body.win .pill:not([hidden]) ~ #caption, body.win #toast:not([hidden]) ~ #caption, body.win.incognito #caption { margin-left: 8px; }
+#caption[hidden] { display: none; }
+#caption button { width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: none;
+  color: var(--fog); display: grid; place-items: center; }
+#caption svg { width: 10px; height: 10px; stroke-width: 1; stroke-linecap: square; shape-rendering: crispEdges; }
+#caption button:hover { background: #ffffff14; color: var(--ice); }
+#caption button:active { background: #ffffff0d; }
+#caption #wclose:hover { background: #c42b1c; color: #fff; }
+#caption #wclose:active { background: #c42b1cd0; }
+#wmax .restore, body.maxed #wmax svg:first-child { display: none; }
+body.maxed #wmax .restore { display: block; }
+body.win:not(.focused) #caption button:not(:hover) { color: #4f5b70; }
 #tabs { display: flex; min-width: 0; height: 30px; }
 #strip { position: relative; }
 .tab.dragging { z-index: 2; background: var(--hull-hi); color: var(--ice); box-shadow: 0 4px 14px #0008; }
@@ -156,6 +171,9 @@ body.mac #strip { padding-left: 80px; }
 #toast span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #toast svg { width: 14px; height: 14px; }
 #toast.failed { background: #f5b54a1f; color: var(--amber); }
+#toast { position: relative; overflow: hidden; }
+#toast.live::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: var(--p, 0%);
+  background: var(--signal); transition: width .4s linear; }
 body.incognito #toast:not([hidden]) + #private { margin-left: 0; }
 
 /* ---------- the guard line: security state, full width ---------- */

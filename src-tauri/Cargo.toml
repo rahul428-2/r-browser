@@ -1,6 +1,6 @@
 [package]
 name = "r-browser"
-version = "0.1.2"
+version = "0.1.3"
 description = "Open-source, security-first browser"
 license = "MPL-2.0"
 edition = "2021"
@@ -33,6 +33,11 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSError", "NSArra
 objc2-local-authentication = { version = "0.3", features = ["LAContext", "block2"] }
 block2 = "0.6"
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "WKContentRuleList", "WKContentRuleListStore", "WKUserContentController"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Same versions Tauri uses, so its WebView2 controller and window handle types are ours too.
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [profile.release]
 lto = true

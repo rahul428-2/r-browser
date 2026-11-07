@@ -9,3 +9,5 @@ pub mod errors;
 pub mod https;
 pub mod library;
 pub mod vault;
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub mod keys;

@@ -37,9 +37,6 @@ pub struct Library {
     /// Sites that passed the one-time safety check (core::check): treated as verified, never checked again.
     #[serde(default)]
     pub checked: Vec<String>,
-    /// Freeze background tabs idle this long; None = 5, 0 = never (settings page: Task 14).
-    #[serde(default)]
-    pub freeze_after_minutes: Option<u64>,
 }
 
 /// The site a per-site setting is keyed on: the host of an http(s) URL.
@@ -162,9 +159,27 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
     (1..).map(|i| dir.join(format!("{stem} ({i}){ext}"))).find(|c| !c.exists()).unwrap()
 }
 
+/// Percent done and seconds left for a download: `got` of `total` bytes after `secs` seconds.
+/// ponytail: time left uses the average speed since the start; a moving window if it jumps around too much.
+pub fn progress(got: u64, total: Option<u64>, secs: f64) -> (Option<u8>, Option<u64>) {
+    let Some(t) = total.filter(|&t| t > 0) else { return (None, None) };
+    let pct = (got.min(t) * 100 / t) as u8;
+    let eta = (secs >= 1.0 && got > 0).then(|| (t.saturating_sub(got) as f64 * secs / got as f64).round() as u64);
+    (Some(pct), eta)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_progress() {
+        assert_eq!(progress(50, Some(200), 10.0), (Some(25), Some(30))); // 5 B/s, 150 B left
+        assert_eq!(progress(200, Some(200), 4.0), (Some(100), Some(0)));
+        assert_eq!(progress(10, None, 5.0), (None, None));      // server sent no size
+        assert_eq!(progress(10, Some(100), 0.5), (Some(10), None)); // too early to guess
+        assert_eq!(progress(300, Some(200), 3.0).0, Some(100)); // never over 100%
+    }
 
     #[test]
     fn blocking_off_only_for_exempted_site() {

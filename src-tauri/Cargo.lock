@@ -3125,7 +3125,7 @@ dependencies = [
 
 [[package]]
 name = "r-browser"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "adblock",
  "aes-gcm",
@@ -3145,6 +3145,8 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-updater",
  "url",
+ "webview2-com",
+ "windows",
  "zeroize",
 ]
 

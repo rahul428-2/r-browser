@@ -108,12 +108,9 @@ pub fn rb_page(url: &str) -> Option<String> {
 /// Tab ids are unique across all windows, so a tab keeps its id (and webview) when torn off into another window.
 static NEXT_TAB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// A background tab idle for `idle_secs` gets its webview closed (frees its memory); 0 = never.
-/// Never: the tab on screen, pinned or playing tabs, a half-typed form, or incognito (its cookies die with the webview).
-pub fn should_freeze(t: &Tab, active: Option<TabId>, now: u64, idle_secs: u64) -> bool {
-    idle_secs > 0 && active != Some(t.id) && !(t.frozen || t.pinned || t.audible || t.dirty_form || t.incognito)
-        && now.saturating_sub(t.last_active) >= idle_secs
-}
+/// A tab you aren't looking at runs on reduced resources (its page stays loaded, never put to sleep).
+/// Not a tab playing sound: low priority could make the audio stutter.
+pub fn should_throttle(t: &Tab, active: Option<TabId>) -> bool { active != Some(t.id) && !t.audible }
 
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -415,18 +412,11 @@ mod tests {
         assert!(!valid_icon(&format!("https://a.com/{}", "x".repeat(3000))));
     }
 
-    fn idle(id: TabId) -> Tab { Tab { id, last_active: 1000, ..Default::default() } }
-    #[test] fn idle_background_tab_frozen() { assert!(should_freeze(&idle(2), Some(1), 1300, 300)); }
-    #[test] fn recent_tab_not_frozen() { assert!(!should_freeze(&idle(2), Some(1), 1299, 300)); }
-    #[test] fn active_never_frozen() { assert!(!should_freeze(&idle(2), Some(2), 9999, 300)); }
-    #[test] fn audible_never_frozen() { assert!(!should_freeze(&Tab { audible: true, ..idle(2) }, Some(1), 9999, 300)); }
-    #[test] fn pinned_never_frozen() { assert!(!should_freeze(&Tab { pinned: true, ..idle(2) }, Some(1), 9999, 300)); }
-    #[test] fn dirty_form_never_frozen() { assert!(!should_freeze(&Tab { dirty_form: true, ..idle(2) }, Some(1), 9999, 300)); }
-    // Each incognito webview has its own throwaway cookie store: closing it would log the tab out.
-    #[test] fn incognito_never_frozen() { assert!(!should_freeze(&Tab { incognito: true, ..idle(2) }, Some(1), 9999, 300)); }
-    #[test] fn already_frozen_or_setting_off() {
-        assert!(!should_freeze(&Tab { frozen: true, ..idle(2) }, Some(1), 9999, 300));
-        assert!(!should_freeze(&idle(2), Some(1), 9999, 0));
+    #[test] fn background_tabs_throttled() {
+        let t = Tab { id: 2, ..Default::default() };
+        assert!(should_throttle(&t, Some(1)));
+        assert!(!should_throttle(&t, Some(2)));                                 // the tab on screen
+        assert!(!should_throttle(&Tab { audible: true, ..t.clone() }, Some(1))); // playing sound
     }
     #[test] fn idle_counts_from_when_tab_was_left() {
         let (mut l, a, b, _) = three();

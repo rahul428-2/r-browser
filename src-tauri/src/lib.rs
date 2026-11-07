@@ -23,6 +23,8 @@ const BAR: f64 = 84.0; // tab strip 36 + toolbar 47 + guard line 1
 const MAIN: &str = "main";
 const ZOOM_STEPS: [f64; 9] = [0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0];
 
+struct Live { win: String, name: String, start: std::time::Instant, got: u64, pct: Option<u8>, eta: Option<u64> }
+
 /// One tab list per browser window, keyed by window label ("main", "incognito-1", ...).
 struct Browser(Mutex<HashMap<String, TabList>>);
 /// Bookmarks, history, downloads (normal windows only).
@@ -43,6 +45,8 @@ struct StartUrls(Mutex<Vec<String>>);
 struct Runtime {
     zoom: Mutex<HashMap<String, f64>>,
     downloads: Mutex<HashMap<String, PathBuf>>,
+    /// Downloads in flight by URL, for progress: (window, file name, started, last percent/seconds left/bytes).
+    live: Mutex<HashMap<String, Live>>,
     /// Last fully loaded URL per tab webview: a download starts like a navigation, so we roll back to this.
     committed: Mutex<HashMap<String, String>>,
     /// A tab being dragged outside the strips: (window it lives in now, tab, grab offset x, y in that window).
@@ -236,9 +240,15 @@ fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::R
     // macOS: draw the tab strip where the title bar was (like Chrome); keeps webview coordinates exact.
     #[cfg(target_os = "macos")]
     let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    // Windows: no system title bar; the tab strip is the title bar, with its own minimize/maximize/close (like Chrome).
+    #[cfg(target_os = "windows")]
+    let builder = builder.decorations(false);
     let w = builder.build()?;
-    // Windows/Linux: no File/Edit bar under the title; the menu stays attached so its shortcuts still work.
-    #[cfg(not(target_os = "macos"))]
+    // Re-setting resizable makes Tauri add its edge-resize borders, which it skips for windows without a page of their own.
+    #[cfg(target_os = "windows")]
+    w.set_resizable(true)?;
+    // Linux: no File/Edit bar under the title; the menu stays attached so its shortcuts still work.
+    #[cfg(target_os = "linux")]
     w.hide_menu()?;
     app.state::<Browser>().inner().0.lock().unwrap().insert(win.to_string(), TabList::default());
     let (width, _) = content_area(&w);
@@ -255,6 +265,8 @@ fn create_window(app: &AppHandle, win: &str, at: Option<(f64, f64)>) -> tauri::R
     )?;
     // The toolbar loads site icons, so it gets the ad/tracker block list too (no-op until the list is loaded).
     platform::set_blocking(&ui, true);
+    shortcuts(app, &ui);
+    platform::raise_resize_borders(&w);
     let (app2, win2) = (app.clone(), win.to_string());
     w.on_window_event(move |e| match e {
         WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => layout(&app2, &win2),
@@ -275,6 +287,32 @@ fn target(url: &str) -> WebviewUrl {
     }
 }
 
+/// While anything downloads, twice a second: read the byte counts and tell the toolbar (percent, time left).
+fn watch_progress(app: &AppHandle) {
+    static ON: AtomicBool = AtomicBool::new(false);
+    if ON.swap(true, Ordering::SeqCst) { return; }
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        {
+            let rt = app.state::<Runtime>();
+            let live = rt.live.lock().unwrap(); // under the lock, so a new download can't slip past
+            if live.is_empty() { ON.store(false, Ordering::SeqCst); return; }
+        }
+        let a = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            for (url, got, total) in platform::download_progress() {
+                let rt = a.state::<Runtime>();
+                let mut live = rt.live.lock().unwrap();
+                let Some(l) = live.get_mut(&url) else { continue };
+                (l.pct, l.eta) = core::library::progress(got, total, l.start.elapsed().as_secs_f64());
+                l.got = got;
+                let _ = a.emit_to(ui_label(&l.win), "download", (l.win.clone(), l.name.clone(), "progress", got, l.pct, l.eta));
+            }
+        });
+    });
+}
+
 fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
     let win = parse_label(app, wv.label()).map(|(w, _)| w).unwrap_or_else(|| MAIN.into());
     let incognito = is_incognito(&win) || is_incognito_label(wv.label());
@@ -289,6 +327,9 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
             let path = unique_path(&dir, &suggested);
             *destination = path.clone();
             rt.downloads.lock().unwrap().insert(url.to_string(), path.clone());
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            rt.live.lock().unwrap().insert(url.to_string(), Live { win: win.clone(), name, start: std::time::Instant::now(), got: 0, pct: None, eta: None });
+            watch_progress(app);
             if let (Some((w, id)), Some(prev)) = (parse_label(app, wv.label()), rt.committed.lock().unwrap().get(wv.label()).cloned()) {
                 with(app, &w, |l| if let Some(t) = l.get_mut(id) { t.url = prev; t.loading = false; });
                 emit(app, &w);
@@ -301,6 +342,8 @@ fn on_download(app: &AppHandle, wv: &Webview, ev: DownloadEvent<'_>) -> bool {
         }
         DownloadEvent::Finished { url, success, .. } => {
             let path = rt.downloads.lock().unwrap().remove(url.as_str());
+            rt.live.lock().unwrap().remove(url.as_str());
+            platform::download_finished(url.as_str());
             if let (Some(p), true) = (&path, success) { mark_from_internet(p, url.as_str()); }
             if !incognito {
                 lib(app, |l| if let Some(d) = l.downloads.iter_mut().rev().find(|d| d.url == url.as_str()) { d.done = true; d.ok = success; });
@@ -396,6 +439,9 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
         .initialization_script(include_str!("inject/state.js"));
     if !is_incognito(win) { builder = builder.initialization_script(include_str!("inject/login.js")); }
     let wv = w.add_child(builder, LogicalPosition::new(0.0, BAR), LogicalSize::new(width, h))?;
+    shortcuts(app, &wv);
+    platform::raise_resize_borders(&w);
+    platform::watch_downloads(&wv);
     sync_blocking(app, &wv, url);
     if let Some(&z) = app.state::<Runtime>().zoom.lock().unwrap().get(wv.label()) { let _ = wv.set_zoom(z); } // thawed tab keeps its zoom
     #[cfg(target_os = "macos")]
@@ -612,7 +658,10 @@ fn start_blocker(app: &AppHandle) {
         for wv in a.webviews().into_values() {
             if wv.label().ends_with("-ui") { platform::set_blocking(&wv, true); continue; } // it loads site icons
             if !is_tab_label(wv.label()) { continue; }
-            let url = wv.url().map(|u| u.to_string()).unwrap_or_default();
+            // The tab's own record, not wv.url(): wry panics on a web view that never committed a page (a tab
+            // whose first load became a download), and this runs right at startup.
+            let Some((win, id)) = parse_label(&a, wv.label()) else { continue };
+            let url = with(&a, &win, |l| l.get_mut(id).map(|t| t.url.clone())).unwrap_or_default();
             sync_blocking(&a, &wv, &url);
         }
     });
@@ -683,35 +732,28 @@ fn activate(app: &AppHandle, win: &str, id: TabId) -> Res {
     for other in tab_ids(app, win).into_iter().filter(|&o| o != id) {
         if let Some(wv) = app.get_webview(&label(win, other)) { let _ = wv.hide(); }
     }
+    throttle(app, win);
     emit(app, win);
     Ok(())
 }
 
-/// Every 30 s, close the webviews of tabs idle longer than the setting (default 5 min). The tab stays in the
-/// strip (greyed) with its address and scroll position; clicking it loads the page again.
-/// ponytail: back/forward history and in-page state are lost on freeze (WebView2 TrySuspend keeps them → Task 14).
-fn start_freezer(app: &AppHandle) {
+/// Background tabs keep their page but get fewer resources (platform::set_background). Applied on every tab
+/// switch; this 30 s pass catches tabs that started or stopped playing sound.
+fn start_throttler(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(30));
-        let idle = lib(&app, |l| l.freeze_after_minutes.unwrap_or(5)) * 60;
         let wins: Vec<String> = app.state::<Browser>().0.lock().unwrap().keys().cloned().collect();
-        for win in wins {
-            // Decide, mark and close under one lock, so a click on the tab can't land in between.
-            let froze: Vec<String> = with(&app, &win, |l| {
-                let (active, now) = (l.active, now_secs());
-                l.tabs.iter_mut().filter(|t| core::tabs::should_freeze(t, active, now, idle)).map(|t| {
-                    if let Some(wv) = app.get_webview(&label(&win, t.id)) { let _ = wv.close(); }
-                    t.frozen = true;
-                    t.loading = false;
-                    label(&win, t.id)
-                }).collect()
-            });
-            if froze.is_empty() { continue; }
-            for l in &froze { app.state::<Runtime>().committed.lock().unwrap().remove(l); }
-            emit(&app, &win);
-        }
+        for win in wins { throttle(&app, &win); }
     });
+}
+
+fn throttle(app: &AppHandle, win: &str) {
+    let plan: Vec<(TabId, bool)> = with(app, win, |l| l.tabs.iter().map(|t| (t.id, core::tabs::should_throttle(t, l.active))).collect());
+    // Background first, the tab on screen last: if WebKit ever shares one process between them, it ends up normal.
+    for (id, bg) in plan.iter().filter(|p| p.1).chain(plan.iter().filter(|p| !p.1)) {
+        if let Some(wv) = app.get_webview(&label(win, *id)) { platform::set_background(&wv, *bg); }
+    }
 }
 
 // ---- auto-update (signed builds from GitHub Releases; see tauri.conf.json plugins.updater) ----
@@ -918,6 +960,12 @@ fn new_incognito(app: &AppHandle) -> Res {
     create_window(app, &win, None).map_err(err)
 }
 
+/// Keyboard shortcuts typed into this web view (Windows; elsewhere the app menu has them).
+fn shortcuts(app: &AppHandle, wv: &Webview) {
+    let app = app.clone();
+    platform::on_shortcut(wv, move |id| on_menu(&app, id));
+}
+
 /// The window the user is looking at (for menu shortcuts).
 fn focused(app: &AppHandle) -> String {
     app.windows().into_iter().find(|(_, w)| w.is_focused().unwrap_or(false)).map(|(l, _)| l).unwrap_or_else(|| MAIN.into())
@@ -1076,7 +1124,17 @@ fn bookmark_remove(webview: Webview, app: AppHandle, url: String) -> Res {
 }
 
 #[tauri::command]
-fn downloads_list(webview: Webview, app: AppHandle) -> Result<Vec<Download>, String> { trusted(&webview)?; Ok(lib(&app, |l| l.downloads.iter().rev().cloned().collect())) }
+fn downloads_list(webview: Webview, app: AppHandle) -> Result<Vec<DownloadRow>, String> { trusted(&webview)?;
+    let rt = app.state::<Runtime>();
+    let live = rt.live.lock().unwrap();
+    Ok(lib(&app, |l| l.downloads.iter().rev().map(|d| {
+        let now = if d.done { None } else { live.get(&d.url) };
+        DownloadRow { d: d.clone(), got: now.map(|l| l.got), pct: now.and_then(|l| l.pct), eta: now.and_then(|l| l.eta) }
+    }).collect()))
+}
+
+#[derive(serde::Serialize)]
+struct DownloadRow { #[serde(flatten)] d: Download, got: Option<u64>, pct: Option<u8>, eta: Option<u64> }
 
 /// Reveal a finished download in the file manager. Never opens/executes the file itself.
 #[tauri::command]
@@ -1421,10 +1479,12 @@ async fn passwords_import(webview: Webview, app: AppHandle) -> Result<usize, Str
 
 // ---- native menu: shortcuts that work even when a web page has focus ----
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let item = |id: &str, text: &str, acc: &str| MenuItemBuilder::with_id(id, text).accelerator(acc).build(app);
     let tab_menu = SubmenuBuilder::new(app, "Tab")
         .item(&item("new-tab", "New Tab", "CmdOrCtrl+T")?)
+        .item(&item("new-window", "New Window", "CmdOrCtrl+N")?)
         .item(&item("new-incognito", "New Incognito Window", "CmdOrCtrl+Shift+N")?)
         .item(&item("close-tab", "Close Tab", "CmdOrCtrl+W")?)
         .separator()
@@ -1473,6 +1533,8 @@ fn on_menu(app: &AppHandle, id: &str) {
                 r
             }
             ("new-incognito", _) => new_incognito(&app),
+            ("new-window", _) => create_window(&app, &format!("window-{}", NEXT_WINDOW.fetch_add(1, Ordering::SeqCst)), None).map_err(err),
+            ("close-window", _) => app.get_window(&win).map_or(Ok(()), |w| w.close().map_err(err)),
             ("check-update", _) => { check_update(app.clone(), true).await; Ok(()) }
             ("close-tab", Some(c)) => close(&app, &win, c),
             ("focus-url", _) => { focus_ui(&app, &win, "document.getElementById('url').focus()"); Ok(()) }
@@ -1493,6 +1555,12 @@ fn on_menu(app: &AppHandle, id: &str) {
                 let j = if id == "next-tab" { (i + 1) % n } else { (i + n - 1) % n };
                 activate(&app, &win, ids[j])
             }
+            // tab-1..tab-8: that tab in strip order (tabs hidden in a collapsed group don't count); tab-last: the last one.
+            (s, Some(c)) if s.starts_with("tab-") => {
+                let ids: Vec<TabId> = with(&app, &win, |l| l.tabs.iter().filter(|t| t.id == c || l.visible(t.id)).map(|t| t.id).collect());
+                let pick = match s[4..].parse::<usize>() { Ok(n) => n.checked_sub(1).and_then(|i| ids.get(i)), Err(_) => ids.last() };
+                pick.map_or(Ok(()), |&t| activate(&app, &win, t))
+            }
             _ => Ok(()),
         };
         if let Err(e) = r { eprintln!("menu {id}: {e}"); }
@@ -1502,7 +1570,7 @@ fn on_menu(app: &AppHandle, id: &str) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Browser(Mutex::new(HashMap::new())))
-        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default(), app_nav: Mutex::default(), user_nav: Mutex::default(), scroll_to: Mutex::default() })
+        .manage(Runtime { zoom: Mutex::default(), downloads: Mutex::default(), live: Mutex::default(), committed: Mutex::default(), tear: Mutex::default(), hint: Mutex::default(), popups: Mutex::default(), engine: Mutex::default(), failed: Mutex::default(), upgraded: Mutex::default(), insecure_ok: Mutex::default(), app_nav: Mutex::default(), user_nav: Mutex::default(), scroll_to: Mutex::default() })
         .manage(VaultRt::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1519,11 +1587,13 @@ pub fn run() {
             let top: Vec<String> = top.lines().map(String::from).collect();
             app.manage(Checks { checker: core::check::Checker::new(&top, &lists), watching: Mutex::default(), failed: Mutex::default() });
             app.manage(Lib(Mutex::new(library)));
+            // Windows: no app menu (it would only be hidden); shortcuts come from the web views (platform::on_shortcut).
+            #[cfg(not(target_os = "windows"))]
             app.set_menu(build_menu(&handle)?)?;
             app.on_menu_event(|app, e| on_menu(app, e.id().as_ref()));
             create_window(&handle, MAIN, None)?;
             start_blocker(&handle);
-            start_freezer(&handle);
+            start_throttler(&handle);
             start_updater(&handle);
             let h = handle.clone();
             platform::on_load_failed(move |e, url, domain, code, desc| on_load_failed(&h, e, url, domain, code, desc));

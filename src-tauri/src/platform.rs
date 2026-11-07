@@ -297,3 +297,190 @@ pub fn on_lockdown(_: impl Fn(String) -> bool + Send + Sync + 'static) {}
 pub fn on_main_navigation(_: impl Fn(String, String, isize) -> Option<String> + Send + Sync + 'static) {}
 #[cfg(not(target_os = "macos"))]
 pub fn show_html(_: &tauri::Webview, _: String, _: String) {}
+
+/// Windows: the focused web view (WebView2) swallows keys before the hidden menu's accelerators can see them,
+/// so take Chrome's shortcuts from WebView2 itself. Runs before the page sees the key; others pass through.
+#[cfg(target_os = "windows")]
+pub fn on_shortcut(wv: &tauri::Webview, f: impl Fn(&'static str) + Send + 'static) {
+    use webview2_com::{AcceleratorKeyPressedEventHandler, Microsoft::Web::WebView2::Win32::*};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT};
+    let _ = wv.with_webview(move |p| unsafe {
+        let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
+            args.KeyEventKind(&mut kind)?;
+            if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN { return Ok(()); }
+            let mut vk = 0u32;
+            args.VirtualKey(&mut vk)?;
+            let down = |k: VIRTUAL_KEY| GetKeyState(k.0 as i32) < 0;
+            let Some(id) = crate::core::keys::shortcut(vk, down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU)) else { return Ok(()) };
+            args.SetHandled(true)?;
+            let mut st = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
+            args.PhysicalKeyStatus(&mut st)?;
+            if !st.WasKeyDown.as_bool() || crate::core::keys::repeats(id) { f(id); }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        let _ = p.controller().add_AcceleratorKeyPressed(&handler, &mut token);
+    });
+}
+#[cfg(not(target_os = "windows"))]
+pub fn on_shortcut(_: &tauri::Webview, _: impl Fn(&'static str) + Send + 'static) {}
+
+/// Windows, frameless window: Tauri's invisible resize-border window must stay above the tab web views,
+/// which are added later and would otherwise cover it (no resizing from the edges until the next resize).
+#[cfg(target_os = "windows")]
+pub fn raise_resize_borders(w: &tauri::Window) {
+    use windows::{core::w, Win32::UI::WindowsAndMessaging::*};
+    let Ok(hwnd) = w.hwnd() else { return };
+    unsafe {
+        if let Ok(h) = FindWindowExW(Some(hwnd), None, w!("TAURI_DRAG_RESIZE_BORDERS"), w!("TAURI_DRAG_RESIZE_WINDOW")) {
+            let _ = SetWindowPos(h, Some(HWND_TOP), 0, 0, 0, 0, SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOOWNERZORDER);
+        }
+    }
+}
+#[cfg(not(target_os = "windows"))]
+pub fn raise_resize_borders(_: &tauri::Window) {}
+
+// ---- download progress: wry only reports start and finish. Keep each native download object (main thread
+// only) and read its byte counts when asked: WKDownload.progress on macOS, the WebView2 download operation on Windows. ----
+
+/// Same spelling as the URL wry reports to on_download (it goes through url::Url too).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn norm(u: &str) -> String { url::Url::parse(u).map(|u| u.to_string()).unwrap_or_else(|_| u.to_string()) }
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static DOWNLOADS: std::cell::RefCell<Vec<(String, objc2::rc::Retained<objc2::runtime::AnyObject>)>> = Default::default();
+}
+#[cfg(target_os = "windows")]
+thread_local! {
+    static DOWNLOADS: std::cell::RefCell<Vec<(String, webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2DownloadOperation)>> = Default::default();
+}
+
+/// macOS: wrap wry's download:decideDestinationUsingResponse:… to keep the WKDownload, then let wry decide.
+#[cfg(target_os = "macos")]
+static WRY_DEST: std::sync::OnceLock<objc2::runtime::Imp> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "macos")]
+unsafe extern "C-unwind" fn decide_destination(this: *mut objc2::runtime::AnyObject, cmd: objc2::runtime::Sel, download: *mut objc2::runtime::AnyObject,
+                                               response: *mut objc2::runtime::AnyObject, name: *mut objc2::runtime::AnyObject, handler: *mut objc2::runtime::AnyObject) {
+    use objc2::{msg_send, runtime::AnyObject};
+    use objc2_foundation::NSURLRequest;
+    unsafe {
+        let req: *mut NSURLRequest = msg_send![download, originalRequest];
+        let url = req.as_ref().and_then(|r| r.URL()).and_then(|u| u.absoluteString()).map(|s| norm(&s.to_string()));
+        if let (Some(url), Some(d)) = (url, objc2::rc::Retained::retain(download)) { DOWNLOADS.with(|v| v.borrow_mut().push((url, d))); }
+        let Some(orig) = WRY_DEST.get() else { return };
+        let orig: unsafe extern "C-unwind" fn(*mut AnyObject, objc2::runtime::Sel, *mut AnyObject, *mut AnyObject, *mut AnyObject, *mut AnyObject) = std::mem::transmute(*orig);
+        orig(this, cmd, download, response, name, handler)
+    }
+}
+
+/// Start following downloads from this tab. macOS: hooks wry's download delegate class once it exists (wry makes it
+/// with the first tab, so call this after creating each tab). Windows: listens on the tab's WebView2.
+#[cfg(target_os = "macos")]
+pub fn watch_downloads(_: &tauri::Webview) {
+    use objc2::{runtime::{AnyClass, Imp}, sel};
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DONE.load(std::sync::atomic::Ordering::Relaxed) { return; }
+    let Some(cls) = AnyClass::classes().iter().copied().find(|c| c.name().to_str().is_ok_and(|n| n.contains("::WryDownloadDelegate"))) else { return };
+    DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        let m = objc2::ffi::class_getInstanceMethod(cls, sel!(download:decideDestinationUsingResponse:suggestedFilename:completionHandler:));
+        if m.is_null() { return; }
+        let ours: Imp = std::mem::transmute(decide_destination as unsafe extern "C-unwind" fn(_, _, _, _, _, _));
+        if let Some(old) = objc2::ffi::method_setImplementation(m as *mut _, ours) { let _ = WRY_DEST.set(old); }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn watch_downloads(wv: &tauri::Webview) {
+    use webview2_com::{take_pwstr, DownloadStartingEventHandler, Microsoft::Web::WebView2::Win32::*};
+    use windows::core::{Interface, PWSTR};
+    let _ = wv.with_webview(|p| unsafe {
+        let Ok(core) = p.controller().CoreWebView2() else { return };
+        let Ok(wv4) = core.cast::<ICoreWebView2_4>() else { return };
+        let handler = DownloadStartingEventHandler::create(Box::new(|_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let op = args.DownloadOperation()?;
+            let mut uri = PWSTR::null();
+            op.Uri(&mut uri)?;
+            let url = norm(&take_pwstr(uri));
+            DOWNLOADS.with(|v| v.borrow_mut().push((url, op)));
+            Ok(())
+        }));
+        let mut token = 0i64;
+        let _ = wv4.add_DownloadStarting(&handler, &mut token);
+    });
+}
+
+/// (url, bytes so far, total bytes if known) for each download in flight. Main thread only.
+#[cfg(target_os = "macos")]
+pub fn download_progress() -> Vec<(String, u64, Option<u64>)> {
+    use objc2::{msg_send, runtime::AnyObject};
+    DOWNLOADS.with(|v| v.borrow().iter().filter_map(|(u, d)| unsafe {
+        let p: *mut AnyObject = msg_send![&**d, progress];
+        if p.is_null() { return None; }
+        let (got, total): (i64, i64) = (msg_send![p, completedUnitCount], msg_send![p, totalUnitCount]);
+        Some((u.clone(), got.max(0) as u64, (total > 0).then_some(total as u64)))
+    }).collect())
+}
+
+#[cfg(target_os = "windows")]
+pub fn download_progress() -> Vec<(String, u64, Option<u64>)> {
+    DOWNLOADS.with(|v| v.borrow().iter().filter_map(|(u, op)| unsafe {
+        let (mut got, mut total) = (0i64, 0i64);
+        op.BytesReceived(&mut got).ok()?;
+        op.TotalBytesToReceive(&mut total).ok()?;
+        Some((u.clone(), got.max(0) as u64, (total > 0).then_some(total as u64)))
+    }).collect())
+}
+
+/// The download ended (either way): stop following it. Main thread only.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn download_finished(url: &str) { DOWNLOADS.with(|v| v.borrow_mut().retain(|(u, _)| u != url)); }
+
+// ponytail: no progress on Linux yet (WebKitGTK's WebKitDownload has it); comes with the Task 14 Linux glue.
+#[cfg(target_os = "linux")]
+pub fn watch_downloads(_: &tauri::Webview) {}
+#[cfg(target_os = "linux")]
+pub fn download_progress() -> Vec<(String, u64, Option<u64>)> { Vec::new() }
+#[cfg(target_os = "linux")]
+pub fn download_finished(_: &str) {}
+
+// ---- background tabs: fewer resources, page kept (never put to sleep) ----
+
+/// macOS: the tab's web content process gets background priority (Darwin "background" band: lowest CPU priority,
+/// throttled disk and network I/O); WebKit already slows timers in hidden views. Back to normal when shown.
+#[cfg(target_os = "macos")]
+pub fn set_background(wv: &tauri::Webview, bg: bool) {
+    extern "C" { fn setpriority(which: i32, who: u32, prio: i32) -> i32; }
+    const PRIO_DARWIN_PROCESS: i32 = 4;
+    const PRIO_DARWIN_BG: i32 = 0x1000;
+    let _ = wv.with_webview(move |p| unsafe {
+        use objc2::{msg_send, runtime::{AnyObject, Bool}, sel};
+        let v = p.inner() as *mut AnyObject;
+        // Private but long-standing (WKWebViewPrivate.h); skipped if a WebKit ever drops it.
+        let has: Bool = msg_send![v, respondsToSelector: sel!(_webProcessIdentifier)];
+        if !has.as_bool() { return; }
+        let pid: i32 = msg_send![v, _webProcessIdentifier];
+        if pid > 0 { setpriority(PRIO_DARWIN_PROCESS, pid as u32, if bg { PRIO_DARWIN_BG } else { 0 }); }
+    });
+}
+
+/// Windows: WebView2 keeps a background tab's memory low (it trims caches and pages memory out); hidden web views
+/// already get throttled timers. Needs WebView2 runtime 114+; older ones skip it.
+#[cfg(target_os = "windows")]
+pub fn set_background(wv: &tauri::Webview, bg: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::*;
+    use windows::core::Interface;
+    let _ = wv.with_webview(move |p| unsafe {
+        let Ok(core) = p.controller().CoreWebView2() else { return };
+        let Ok(w19) = core.cast::<ICoreWebView2_19>() else { return };
+        let _ = w19.SetMemoryUsageTargetLevel(if bg { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL });
+    });
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_background(_: &tauri::Webview, _: bool) {}

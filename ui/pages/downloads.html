@@ -15,6 +15,11 @@
     const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
     const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
 
+    const left = (s) => s == null ? "" : s < 60 ? `${s} s left` : s < 3600 ? `${Math.round(s / 60)} min left` : `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min left`;
+    const mb = (b) => b < 1e6 ? `${Math.round(b / 1e3)} KB` : b < 1e9 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e9).toFixed(2)} GB`;
+    // "Downloading · 45% · 2 min left", or the bytes so far when the site didn't say how big the file is.
+    const progressText = (d) => ["Downloading", d.pct != null ? `${d.pct}%` : d.got ? mb(d.got) : "", left(d.eta)].filter(Boolean).join(" · ");
+
     async function render() {
       const items = await invoke("downloads_list");
       const list = document.getElementById("list");
@@ -24,7 +29,7 @@
         const row = el("div", "row");
         const name = d.path.split(/[\\/]/).pop();
         const main = el("div", "main");
-        const status = !d.done ? el("span", null, "Downloading…") : d.ok ? el("span", "ok", "Saved") : el("span", "bad", "Failed");
+        const status = !d.done ? el("span", null, progressText(d)) : d.ok ? el("span", "ok", "Saved") : el("span", "bad", "Failed");
         const sub = el("div", "sub"); sub.append(status, " from " + host(d.url));
         main.append(el("div", "title", name), sub);
         row.append(el("span", "mono", (name.split(".").pop() || "?").slice(0, 3).toUpperCase()), main);
@@ -37,7 +42,7 @@
       }
     }
     render();
-    setInterval(render, 2000); // ponytail: polling; push events if the list ever gets long
+    setInterval(render, 1000); // ponytail: polling; push events if the list ever gets long
   </script>
 </body>
 </html>
