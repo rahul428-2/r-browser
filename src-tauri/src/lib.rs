@@ -802,7 +802,23 @@ fn ask_restart(app: &AppHandle) {
 fn install_update(app: &AppHandle) -> Res {
     let Some((u, bytes)) = app.state::<UpdateReady>().0.lock().unwrap().take() else { return Ok(()) };
     save_session_now(app);
-    u.install(&bytes).map_err(err)?; // checks the signature again before replacing the app
+    // The signature was checked when it downloaded. Windows: on success install() starts the installer and exits.
+    let mut r = u.install(&bytes);
+    // Windows: a just-written installer is often still locked by the antivirus scan ("Access is denied"): retry.
+    for _ in 0..3 {
+        if !cfg!(target_os = "windows") || r.is_ok() { break; }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        r = u.install(&bytes);
+    }
+    #[cfg(target_os = "windows")]
+    if let Err(e) = &r {
+        // Still blocked (usually antivirus, or a declined permission prompt): offer the same installer from the website.
+        let go = app.dialog().message(format!("Windows wouldn't start the update installer ({e}). This is usually the antivirus. Download the installer from the website instead? Your tabs and data are kept."))
+            .title("R-Browser updates").buttons(MessageDialogButtons::OkCancelCustom("Download".into(), "Not now".into())).blocking_show();
+        if go { let _ = std::process::Command::new("explorer.exe").arg("https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser-Windows-Setup.exe").spawn(); }
+        return Ok(());
+    }
+    r.map_err(err)?;
     app.restart()
 }
 
