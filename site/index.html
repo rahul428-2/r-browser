@@ -346,11 +346,11 @@ footer a { color: var(--muted); }
 
     <h2 id="install">Install</h2>
     <p>The download button above picks the right file for your computer. You can also get each file directly.</p>
-    <h3 style="margin-top:1.5rem">macOS 13 or later, Apple silicon</h3>
+    <h3 style="margin-top:1.5rem">macOS 14 or later, Apple silicon</h3>
     <ol class="steps">
       <li>Download <a href="https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser.app.tar.gz">R-Browser.app.tar.gz</a> (7.2 MB) and unpack it.</li>
       <li>Move R-Browser to Applications.</li>
-      <li>The first time, right-click R-Browser and choose <kbd>Open</kbd>. The app isn't notarized yet, so macOS asks once.</li>
+      <li>Open it. The app isn't notarized yet, so the first time macOS says it can't verify it: click <kbd>Done</kbd>, open System Settings &rarr; Privacy &amp; Security, scroll down and click <kbd>Open Anyway</kbd>. macOS only asks once.</li>
     </ol>
     <h3 style="margin-top:1.5rem">Windows 10 and 11, 64-bit</h3>
     <ol class="steps">
@@ -400,7 +400,7 @@ footer a { color: var(--muted); }
     var os = detect();
     if (os) location.href = files[os];
     msg.textContent = os === 'win' ? 'Downloading for Windows. If SmartScreen warns you, choose More info, then Run anyway.'
-      : os === 'mac' ? 'Downloading for Mac. Unpack it, move R-Browser to Applications, then right-click it and choose Open.'
+      : os === 'mac' ? 'Downloading for Mac. Unpack it and move R-Browser to Applications. If macOS says it can\'t verify it, go to System Settings, Privacy & Security, and click Open Anyway.'
       : 'R-Browser runs on Mac and Windows computers. Open this page on one of them to download it.';
   });
 })();

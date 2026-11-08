@@ -16,7 +16,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "macOS": { "minimumSystemVersion": "14.0" },
+    "macOS": { "minimumSystemVersion": "14.0", "signingIdentity": "-" },
     "publisher": "Rahul Varma",
     "copyright": "Copyright (c) 2026 Rahul Varma. MPL-2.0.",
     "homepage": "https://rahul428-2.github.io/r-browser/",

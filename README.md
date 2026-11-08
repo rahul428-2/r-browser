@@ -29,12 +29,12 @@ Details in [bench/README.md](bench/README.md).
 
 ## Download
 
-| Windows 10/11 (64-bit) | macOS 13+ (Apple silicon) |
+| Windows 10/11 (64-bit) | macOS 14+ (Apple silicon) |
 |---|---|
 | **[⬇ R-Browser-Windows-Setup.exe](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser-Windows-Setup.exe)** | **[⬇ R-Browser.app.tar.gz](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser.app.tar.gz)** |
 
 **Windows:** run the setup file. Until the installer is code-signed, SmartScreen may say "Windows protected your PC": click **More info** → **Run anyway**.
-**macOS:** unpack it and move **R-Browser.app** to Applications. The app is not notarized (no paid certificate), so the first time: right-click it → **Open** → **Open**.
+**macOS:** unpack it and move **R-Browser.app** to Applications. The app is not notarized (no paid certificate), so the first time macOS says it can't verify it: click **Done**, then **System Settings → Privacy & Security → Open Anyway**.
 
 Both update themselves after that. Linux is planned. All files: [Releases](https://github.com/rahul428-2/r-browser/releases/latest).
 
