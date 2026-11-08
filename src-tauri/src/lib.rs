@@ -1,5 +1,7 @@
 pub mod core;
 mod platform;
+#[cfg(target_os = "macos")]
+mod relay;
 
 use crate::core::blocker;
 use crate::core::library::{site, unique_path, Download, Library, Suggestion, Visit, Bookmark};
@@ -432,7 +434,11 @@ fn create_webview(app: &AppHandle, win: &str, id: TabId, url: &str) -> tauri::Re
             tauri::webview::NewWindowResponse::Deny
         });
     #[cfg(target_os = "macos")]
-    { builder = builder.user_agent(user_agent()); }
+    {
+        builder = builder.user_agent(user_agent());
+        // No HTTP/3: it breaks on sub-1500 MTU lines (see relay.rs).
+        if let Some(u) = relay::url() { builder = builder.proxy_url(u); }
+    }
     builder = builder.initialization_script(include_str!("inject/dark.js"))
         .initialization_script(include_str!("inject/popup.js"))
         .initialization_script(include_str!("inject/icon.js"))
@@ -512,6 +518,8 @@ fn on_load_failed(app: &AppHandle, engine: usize, url: String, domain: String, c
         parse_label(app, &label).and_then(|(w, id)| with(app, &w, |l| l.get(id).map(|t| t.url.clone()))).unwrap_or_default()
     } else { url };
     if !url.starts_with("http") { return; }
+    #[cfg(target_os = "macos")]
+    let code = relay::real_code(&url, code);
     if let Some(http) = failed_upgrade(app, &url, &domain, code) {
         if let (Some(wv), Some(page)) = (app.get_webview(&label), page_url(app, &core::https::insecure_page(&http))) { let _ = wv.navigate(page); }
         return;

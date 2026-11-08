@@ -3144,6 +3144,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-updater",
+ "tokio",
  "url",
  "webview2-com",
  "windows",

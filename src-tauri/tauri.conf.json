@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "R-Browser",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "identifier": "com.rbrowser.app",
   "build": {
     "frontendDist": "../ui"
@@ -16,6 +16,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": { "minimumSystemVersion": "14.0" },
     "publisher": "Rahul Varma",
     "copyright": "Copyright (c) 2026 Rahul Varma. MPL-2.0.",
     "homepage": "https://rahul428-2.github.io/r-browser/",
