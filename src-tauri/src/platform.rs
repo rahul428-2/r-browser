@@ -112,6 +112,23 @@ fn prune(id: &str) {
     unsafe { store.getAvailableContentRuleListIdentifiers(Some(&got)) };
 }
 
+/// Settings → Clear browsing data: cookies, cache and site storage of normal windows changed at or after
+/// `since` (unix seconds; 0 = everything). Incognito windows keep their own throwaway store.
+#[cfg(target_os = "macos")]
+pub fn clear_site_data(app: &tauri::AppHandle, since: u64) {
+    let _ = app.run_on_main_thread(move || unsafe {
+        use objc2_web_kit::WKWebsiteDataStore;
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+        let date = objc2_foundation::NSDate::dateWithTimeIntervalSince1970(since as f64);
+        let done = block2::RcBlock::new(|| {});
+        WKWebsiteDataStore::defaultDataStore(mtm)
+            .removeDataOfTypes_modifiedSince_completionHandler(&WKWebsiteDataStore::allWebsiteDataTypes(mtm), &date, &done);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn clear_site_data(_: &tauri::AppHandle, _: u64) {}
+
 /// Turn blocking on or off for one tab (off for sites the user exempted). No-op until the list is loaded.
 #[cfg(target_os = "macos")]
 pub fn set_blocking(wv: &tauri::Webview, on: bool) {

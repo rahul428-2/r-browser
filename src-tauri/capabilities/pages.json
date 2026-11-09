@@ -37,6 +37,11 @@
     "allow-password-reveal",
     "allow-password-delete",
     "allow-passwords-import",
-    "allow-insecure-continue"
+    "allow-insecure-continue",
+    "allow-settings-get",
+    "allow-settings-set",
+    "allow-site-remove",
+    "allow-clear-data",
+    "allow-check-updates"
   ]
 }

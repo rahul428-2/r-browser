@@ -132,6 +132,8 @@ body.win:not(.focused) #caption button:not(:hover) { color: #4f5b70; }
 #star.on { color: var(--signal); }
 #star.on svg { fill: currentColor; }
 #omni[data-state="none"] #star { display: none; }
+#more { margin-left: 4px; }
+#more svg { fill: currentColor; stroke: none; }
 #key { width: 26px; height: 26px; border-radius: 13px; margin-right: -4px; }
 #key svg { width: 15px; height: 15px; }
 #key[hidden] { display: none; }

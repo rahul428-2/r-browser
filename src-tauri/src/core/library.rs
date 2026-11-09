@@ -14,6 +14,21 @@ pub struct Visit { pub url: String, pub title: String, pub at: u64 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Download { pub url: String, pub path: String, pub at: u64, pub done: bool, pub ok: bool }
 
+/// The Settings page. A missing field (older library.json) gets its default.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Settings {
+    /// Key into core::omnibox::ENGINES.
+    pub search: String,
+    pub block_ads: bool,
+    pub https_only: bool,
+    pub lockdown: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self { Settings { search: "google".into(), block_ads: true, https_only: true, lockdown: true } }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Suggestion { pub url: String, pub title: String, pub bookmarked: bool }
 
@@ -37,6 +52,8 @@ pub struct Library {
     /// Sites that passed the one-time safety check (core::check): treated as verified, never checked again.
     #[serde(default)]
     pub checked: Vec<String>,
+    #[serde(default)]
+    pub settings: Settings,
 }
 
 /// The site a per-site setting is keyed on: the host of an http(s) URL.
@@ -50,7 +67,7 @@ fn matches(q: &str, url: &str, title: &str) -> bool {
 }
 
 impl Library {
-    pub fn blocking_on(&self, url: &str) -> bool { site(url).is_none_or(|h| !self.no_block.contains(&h)) }
+    pub fn blocking_on(&self, url: &str) -> bool { self.settings.block_ads && site(url).is_none_or(|h| !self.no_block.contains(&h)) }
 
     /// Flip blocking for `url`'s site; returns true if the site is now exempted.
     pub fn toggle_blocking(&mut self, url: &str) -> bool {
@@ -87,7 +104,20 @@ impl Library {
     }
 
     /// Also forgets which sites passed the safety check: that list is a record of where you've been.
-    pub fn clear_history(&mut self) { self.history.clear(); self.checked.clear(); }
+    pub fn clear_history(&mut self) { self.clear_history_since(0); }
+
+    /// Visits at or after `since` (unix seconds; 0 = all time). The checked-sites list goes either way.
+    pub fn clear_history_since(&mut self, since: u64) { self.history.retain(|v| v.at < since); self.checked.clear(); }
+
+    /// The Downloads list only; the files stay on disk.
+    pub fn clear_downloads_since(&mut self, since: u64) { self.downloads.retain(|d| d.at < since); }
+
+    /// Settings page: forget one entry of a per-site list. Returns false for an unknown list name.
+    pub fn remove_site(&mut self, list: &str, host: &str) -> bool {
+        let v = match list { "no_block" => &mut self.no_block, "popups" => &mut self.popups, "trusted" => &mut self.trusted, "never_save" => &mut self.never_save, _ => return false };
+        v.retain(|x| x != host);
+        true
+    }
 
     pub fn is_bookmarked(&self, url: &str) -> bool { self.bookmarks.iter().any(|b| b.url == url) }
 
@@ -199,6 +229,40 @@ mod tests {
         assert!(!l.popups_ok("https://a.com/x"));
         l.allow_popups("https://a.com/x");
         assert!(l.popups_ok("https://a.com/y") && !l.popups_ok("https://b.com/"));
+    }
+
+    #[test]
+    fn settings_default_on_and_global_block_switch() {
+        let mut l: Library = serde_json::from_str(r#"{"bookmarks":[],"history":[],"downloads":[]}"#).unwrap();
+        assert_eq!(l.settings, Settings::default());
+        assert!(l.settings.https_only && l.settings.lockdown && l.settings.search == "google");
+        assert!(l.blocking_on("https://news.com/"));
+        l.settings.block_ads = false;
+        assert!(!l.blocking_on("https://news.com/"));
+    }
+
+    #[test]
+    fn clear_since_keeps_older_entries() {
+        let mut l = Library::default();
+        l.record_visit("https://a.com/", "", 100, false);
+        l.record_visit("https://b.com/", "", 200, false);
+        l.checked.push("a.com".into());
+        l.add_download(Download { at: 100, ..Default::default() });
+        l.add_download(Download { at: 200, ..Default::default() });
+        l.clear_history_since(150);
+        l.clear_downloads_since(150);
+        assert_eq!(l.history.iter().map(|v| v.at).collect::<Vec<_>>(), [100]);
+        assert_eq!(l.downloads.iter().map(|d| d.at).collect::<Vec<_>>(), [100]);
+        assert!(l.checked.is_empty());
+    }
+
+    #[test]
+    fn remove_site_from_named_list_only() {
+        let mut l = Library { no_block: vec!["a.com".into(), "b.com".into()], trusted: vec!["a.com".into()], ..Default::default() };
+        assert!(l.remove_site("no_block", "a.com"));
+        assert_eq!(l.no_block, ["b.com"]);
+        assert_eq!(l.trusted, ["a.com"]);
+        assert!(!l.remove_site("bookmarks", "a.com"));
     }
 
     #[test]

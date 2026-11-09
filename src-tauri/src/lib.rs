@@ -4,8 +4,8 @@ mod platform;
 mod relay;
 
 use crate::core::blocker;
-use crate::core::library::{site, unique_path, Download, Library, Suggestion, Visit, Bookmark};
-use crate::core::omnibox::resolve;
+use crate::core::library::{site, unique_path, Download, Library, Settings, Suggestion, Visit, Bookmark};
+use crate::core::omnibox::{self, ENGINES};
 use crate::core::session::{self, Session};
 use crate::core::store;
 use crate::core::tabs::{now_secs, rb_page, to_rb, GroupId, TabId, TabList, COLORS};
@@ -126,6 +126,9 @@ fn tab_ids(app: &AppHandle, win: &str) -> Vec<TabId> { with(app, win, |l| l.tabs
 fn active_url(app: &AppHandle, win: &str) -> Option<(String, String)> {
     with(app, win, |l| l.active.and_then(|a| l.get(a)).map(|t| (t.url.clone(), t.title.clone())))
 }
+/// The URL bar: domain-looking input opens the site, anything else searches with the chosen engine.
+fn resolve(app: &AppHandle, input: &str) -> String { omnibox::resolve(input, &lib(app, |l| l.settings.search.clone())) }
+
 fn lib<R>(app: &AppHandle, f: impl FnOnce(&mut Library) -> R) -> R {
     f(&mut app.state::<Lib>().inner().0.lock().unwrap())
 }
@@ -483,6 +486,7 @@ fn on_main_navigation(app: &AppHandle, url: &str, current: &str, kind: isize) ->
         let expected = rt.app_nav.lock().unwrap().remove(url);
         return (!core::tabs::app_nav_allowed(current, kind, expected)).then(String::new);
     }
+    if !lib(app, |l| l.settings.https_only) { return None; }
     let to = core::https::upgrade(url, &rt.insecure_ok.lock().unwrap())?;
     let host = Url::parse(url).ok()?.host_str()?.to_string();
     let mut up = rt.upgraded.lock().unwrap();
@@ -545,11 +549,12 @@ fn trust_of(app: &AppHandle, url: &str) -> core::trust::Trust { app.state::<Trus
 /// Unverified sites load locked down (Lockdown Mode: JIT and risky web features off) until they pass the check.
 fn needs_lockdown(app: &AppHandle, url: &str) -> bool {
     Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) && trust_of(app, url) == core::trust::Trust::Unverified
+        && lib(app, |l| l.settings.lockdown)
 }
 
 /// First visit to an unverified site (normal windows): check its address now, then watch it for 30 s.
 fn start_check(app: &AppHandle, label: &str, url: &str) {
-    if trust_of(app, url) != core::trust::Trust::Unverified { return; }
+    if trust_of(app, url) != core::trust::Trust::Unverified || !lib(app, |l| l.settings.lockdown) { return; }
     let Some(site) = core::trust::site_of(url) else { return };
     let ck = app.state::<Checks>();
     if ck.failed.lock().unwrap().contains_key(&site) || ck.watching.lock().unwrap().contains_key(&site) { return; }
@@ -665,14 +670,20 @@ fn start_blocker(app: &AppHandle) {
     platform::load_rules(app.clone(), id, move || blocker::Blocker::from_lists(&lists).webkit_rules_json(), move || {
         for wv in a.webviews().into_values() {
             if wv.label().ends_with("-ui") { platform::set_blocking(&wv, true); continue; } // it loads site icons
-            if !is_tab_label(wv.label()) { continue; }
-            // The tab's own record, not wv.url(): wry panics on a web view that never committed a page (a tab
-            // whose first load became a download), and this runs right at startup.
-            let Some((win, id)) = parse_label(&a, wv.label()) else { continue };
-            let url = with(&a, &win, |l| l.get_mut(id).map(|t| t.url.clone())).unwrap_or_default();
-            sync_blocking(&a, &wv, &url);
         }
+        resync_blocking(&a);
     });
+}
+
+/// Re-apply blocking to every open tab (after the lists load, or the Settings switch changes).
+fn resync_blocking(app: &AppHandle) {
+    for wv in app.webviews().into_values().filter(|w| is_tab_label(w.label())) {
+        // The tab's own record, not wv.url(): wry panics on a web view that never committed a page (a tab
+        // whose first load became a download), and this runs right at startup.
+        let Some((win, id)) = parse_label(app, wv.label()) else { continue };
+        let url = with(app, &win, |l| l.get_mut(id).map(|t| t.url.clone())).unwrap_or_default();
+        sync_blocking(app, &wv, &url);
+    }
 }
 
 #[tauri::command]
@@ -1059,7 +1070,7 @@ async fn ui_ready(webview: Webview, app: AppHandle, window: Window) -> Res { tru
             RESTORED.store(true, Ordering::SeqCst);
         }
         let start: Vec<String> = std::mem::take(&mut *app.state::<StartUrls>().inner().0.lock().unwrap());
-        for u in &start { open_tab(&app, &win, &resolve(u))?; }
+        for u in &start { open_tab(&app, &win, &resolve(&app, u))?; }
     }
     if tab_ids(&app, &win).is_empty() { open_tab(&app, &win, "")?; }
     layout(&app, &win);
@@ -1071,7 +1082,7 @@ async fn ui_ready(webview: Webview, app: AppHandle, window: Window) -> Res { tru
 #[tauri::command]
 async fn new_tab(webview: Webview, app: AppHandle, window: Window, url: Option<String>) -> Res { trusted(&webview)?;
     let win = window.label();
-    open_tab(&app, win, &url.map(|u| resolve(&u)).unwrap_or_default())?;
+    open_tab(&app, win, &url.map(|u| resolve(&app, &u)).unwrap_or_default())?;
     if let Some(ui) = app.get_webview(&ui_label(win)) { let _ = ui.set_focus(); }
     Ok(())
 }
@@ -1088,7 +1099,7 @@ async fn activate_tab(webview: Webview, app: AppHandle, window: Window, id: TabI
 #[tauri::command]
 async fn navigate(webview: Webview, app: AppHandle, window: Window, id: TabId, input: String) -> Res { trusted(&webview)?;
     let win = window.label();
-    let url = resolve(&input);
+    let url = resolve(&app, &input);
     with(&app, win, |l| if let Some(t) = l.get_mut(id) { t.url = url.clone(); });
     let wv = tab_webview(&app, win, id)?;
     let dest = match target(&url) {
@@ -1277,12 +1288,81 @@ fn rename_soon(app: &AppHandle, win: &str, g: GroupId) {
     });
 }
 
-/// Ids of our native popup menus: `t|win|action|tab[|group]`, `g|win|action|group[|colour]`, `pw|win|tab|username`.
+// ---- ⋮ menu and the Settings page ----
+
+/// The ⋮ button beside the address bar.
+#[tauri::command]
+async fn app_menu(webview: Webview, app: AppHandle, window: Window) -> Res { trusted(&webview)?;
+    let win = window.label().to_string();
+    let item = |page: &str, text: &str| MenuItemBuilder::with_id(format!("m|{win}|{page}"), text).build(&app);
+    let menu = tauri::menu::MenuBuilder::new(&app)
+        .item(&item("settings", "Settings").map_err(err)?)
+        .item(&item("history", "History").map_err(err)?)
+        .item(&item("extensions", "Extensions").map_err(err)?)
+        .build().map_err(err)?;
+    window.popup_menu(&menu).map_err(err)
+}
+
+#[derive(Serialize)]
+struct SettingsView { settings: Settings, engines: Vec<(&'static str, &'static str)>, search_url: &'static str,
+    no_block: Vec<String>, popups: Vec<String>, trusted: Vec<String>, never_save: Vec<String>, version: String }
+
+#[tauri::command]
+fn settings_get(webview: Webview, app: AppHandle) -> Result<SettingsView, String> { trusted(&webview)?;
+    Ok(lib(&app, |l| SettingsView {
+        search_url: omnibox::search_url(&l.settings.search),
+        settings: l.settings.clone(),
+        engines: ENGINES.iter().map(|e| (e.0, e.1)).collect(),
+        no_block: l.no_block.clone(), popups: l.popups.clone(), trusted: l.trusted.clone(), never_save: l.never_save.clone(),
+        version: app.package_info().version.to_string(),
+    }))
+}
+
+#[tauri::command]
+fn settings_set(webview: Webview, app: AppHandle, settings: Settings) -> Res { trusted(&webview)?;
+    if !ENGINES.iter().any(|e| e.0 == settings.search) { return Err("unknown search engine".into()); }
+    let blocking_changed = lib(&app, |l| std::mem::replace(&mut l.settings, settings.clone()).block_ads != settings.block_ads);
+    save_library_soon(&app);
+    if blocking_changed { resync_blocking(&app); }
+    Ok(())
+}
+
+/// Settings page: forget one per-site exception (blocking off, pop-ups allowed, trusted, never save passwords).
+#[tauri::command]
+fn site_remove(webview: Webview, app: AppHandle, list: String, host: String) -> Res { trusted(&webview)?;
+    if !lib(&app, |l| l.remove_site(&list, &host)) { return Err("unknown list".into()); }
+    if list == "trusted" { app.state::<Trusted>().0.lock().unwrap().untrust(&host); }
+    save_library_soon(&app);
+    if list == "no_block" { resync_blocking(&app); }
+    Ok(())
+}
+
+/// Settings → Clear browsing data. `since`: unix seconds, 0 = all time.
+#[tauri::command]
+fn clear_data(webview: Webview, app: AppHandle, since: u64, history: bool, downloads: bool, site_data: bool) -> Res { trusted(&webview)?;
+    if history {
+        lib(&app, |l| l.clear_history_since(since));
+        app.state::<Trusted>().0.lock().unwrap().clear_checked();
+    }
+    if downloads { lib(&app, |l| l.clear_downloads_since(since)); }
+    if history || downloads { save_library_soon(&app); }
+    if site_data { platform::clear_site_data(&app, since); }
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_updates(webview: Webview, app: AppHandle) -> Res { trusted(&webview)?;
+    check_update(app, true).await;
+    Ok(())
+}
+
+/// Ids of our native popup menus: `m|win|page`, `t|win|action|tab[|group]`, `g|win|action|group[|colour]`, `pw|win|tab|username`.
 fn on_popup(app: &AppHandle, id: &str) -> Res {
     let p: Vec<&str> = id.splitn(5, '|').collect();
     let (kind, win) = (p[0], p.get(1).copied().unwrap_or_default());
     let num = |i: usize| p.get(i).and_then(|x| x.parse::<u64>().ok()).ok_or("bad menu id");
     match (kind, p.get(2).copied().unwrap_or_default()) {
+        ("m", page @ ("settings" | "history" | "extensions")) => open_tab(app, win, &format!("rb://{page}"))?,
         ("b", "toggle") => toggle_blocking(app, win, num(3)?)?,
         ("tr", "trust") => trust_site(app, win, num(3)?, p.get(4).copied().unwrap_or_default())?,
         ("pw", _) => return fill_password(app, win, num(2)?, id.splitn(4, '|').nth(3).unwrap_or_default()),
@@ -1532,7 +1612,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("history", "History", "CmdOrCtrl+Y")?)
         .item(&item("downloads", "Downloads", "CmdOrCtrl+Shift+J")?)
         .item(&item("passwords", "Passwords", "CmdOrCtrl+Alt+P")?)
+        .item(&MenuItemBuilder::with_id("extensions", "Extensions").build(app)?)
         .separator()
+        .item(&item("settings", "Settings…", "CmdOrCtrl+,")?)
         .item(&MenuItemBuilder::with_id("check-update", "Check for Updates…").build(app)?)
         .build()?;
     let menu = Menu::default(app)?;
@@ -1571,7 +1653,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             ("zoom-out", Some(c)) => zoom(&app, &win, c, -1),
             ("zoom-reset", Some(c)) => zoom(&app, &win, c, 0),
             ("bookmark", _) => toggle_bookmark_active(&app, &win),
-            ("bookmarks" | "history" | "downloads" | "passwords", _) => open_tab(&app, &win, &format!("rb://{id}")),
+            ("bookmarks" | "history" | "downloads" | "passwords" | "settings" | "extensions", _) => open_tab(&app, &win, &format!("rb://{id}")),
             ("next-tab" | "prev-tab", Some(c)) => {
                 let ids: Vec<TabId> = with(&app, &win, |l| l.tabs.iter().filter(|t| t.id == c || l.visible(t.id)).map(|t| t.id).collect());
                 let i = ids.iter().position(|&x| x == c).unwrap_or(0);
@@ -1633,7 +1715,8 @@ pub fn run() {
             downloads_list, show_download,
             tab_menu, group_menu, group_toggle, group_rename, move_tab, tear_start, tear_move, tear_end, attach_tab,
             page_event, password_save, password_never, password_dismiss, password_menu,
-            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss, insecure_continue, trust_menu, update_restart
+            passwords_list, password_reveal, password_delete, passwords_import, shield_menu, popup_allow, popup_dismiss, insecure_continue, trust_menu, update_restart,
+            app_menu, settings_get, settings_set, site_remove, clear_data, check_updates
         ])
         .run(tauri::generate_context!())
         .expect("error while running R-Browser");

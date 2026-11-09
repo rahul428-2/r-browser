@@ -52,6 +52,7 @@
     "allow-popup-allow",
     "allow-popup-dismiss",
     "allow-trust-menu",
-    "allow-update-restart"
+    "allow-update-restart",
+    "allow-app-menu"
   ]
 }

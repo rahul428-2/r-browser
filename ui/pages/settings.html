@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Settings</title>
+  <link rel="stylesheet" href="page.css">
+  <style>
+    section { margin-bottom: 36px; }
+    section > h2 { margin-left: 0; font-size: 15px; color: var(--ice); margin-bottom: 10px; }
+    .card { background: var(--well); border: 1px solid var(--line); border-radius: 12px; }
+    .item { display: flex; align-items: center; gap: 16px; padding: 14px 16px; }
+    .item + .item { border-top: 1px solid var(--line); }
+    .item .main .sub { white-space: normal; }
+    select { height: 32px; padding: 0 10px; border-radius: 8px; background: var(--hull); color: var(--ice);
+      border: 1px solid var(--line); font: inherit; }
+    select:focus-visible, input:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+    /* on/off switch */
+    .switch { appearance: none; flex: none; width: 38px; height: 22px; border-radius: 11px; background: var(--line);
+      position: relative; cursor: pointer; transition: background .15s; }
+    .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+      background: var(--ice); transition: transform .15s; }
+    .switch:checked { background: var(--signal); }
+    .switch:checked::after { transform: translateX(16px); }
+    .sites { padding: 4px 16px 12px; }
+    .sites h3 { font-size: 12.5px; font-weight: 600; color: var(--fog); margin: 10px 0 4px; }
+    .site { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+    .site span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .site button.text { height: 26px; padding: 0 10px; }
+    .checks label { display: flex; align-items: center; gap: 10px; padding: 6px 0; cursor: pointer; }
+    .checks input { accent-color: var(--signal); width: 15px; height: 15px; }
+    .actions { display: flex; align-items: center; gap: 12px; }
+    .status { color: var(--fog); font-size: 12.5px; }
+    a { color: var(--glint); }
+  </style>
+</head>
+<body>
+  <header><h1>Settings</h1></header>
+  <main>
+    <section>
+      <h2>Search engine</h2>
+      <div class="card">
+        <div class="item">
+          <div class="main"><div class="title">Search with</div><div class="sub">Used by the address bar and the new tab page.</div></div>
+          <select id="engine" aria-label="Search engine"></select>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Privacy and security</h2>
+      <div class="card">
+        <label class="item">
+          <div class="main"><div class="title">Block ads and trackers</div><div class="sub">Uses EasyList, EasyPrivacy and Peter Lowe's list. Incognito windows always block.</div></div>
+          <input type="checkbox" class="switch" id="block_ads">
+        </label>
+        <label class="item">
+          <div class="main"><div class="title">Secure connections only</div><div class="sub">Try https first for every site and ask before loading one that has no secure version.</div></div>
+          <input type="checkbox" class="switch" id="https_only">
+        </label>
+        <label class="item">
+          <div class="main"><div class="title">Lock down unknown sites</div><div class="sub">Sites outside the 10,000 most visited open with JIT, WebAssembly, WebGL and WebRTC off until a one-time safety check passes.</div></div>
+          <input type="checkbox" class="switch" id="lockdown">
+        </label>
+        <div class="item"><div class="main"><div class="title">Site exceptions</div><div class="sub">Sites you made exceptions for. Remove one to go back to the normal rules.</div>
+          <div id="sites"></div></div></div>
+      </div>
+      <p class="status" id="applies" style="margin:8px 4px 0"></p>
+    </section>
+
+    <section>
+      <h2>Clear browsing data</h2>
+      <div class="card">
+        <div class="item">
+          <div class="main"><div class="title">Time range</div></div>
+          <select id="range" aria-label="Time range">
+            <option value="3600">Last hour</option>
+            <option value="86400">Last 24 hours</option>
+            <option value="604800">Last 7 days</option>
+            <option value="2419200">Last 4 weeks</option>
+            <option value="0" selected>All time</option>
+          </select>
+        </div>
+        <div class="item checks" style="display:block">
+          <label><input type="checkbox" id="c_history" checked> Browsing history</label>
+          <label><input type="checkbox" id="c_site" checked> Cookies and site data <span class="status">(signs you out of most sites)</span></label>
+          <label><input type="checkbox" id="c_downloads"> Downloads list <span class="status">(the files stay on your Mac)</span></label>
+        </div>
+        <div class="item actions">
+          <button class="text danger" id="clear">Clear data</button>
+          <span class="status" id="cleared" role="status"></span>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>About R-Browser</h2>
+      <div class="card">
+        <div class="item">
+          <div class="main"><div class="title" id="version">R-Browser</div><div class="sub">R-Browser updates itself in the background.</div></div>
+          <button class="text" id="update">Check for updates</button>
+        </div>
+        <div class="item">
+          <div class="main sub" style="white-space:normal">
+            <a href="https://rahul428-2.github.io/r-browser/">Website</a> &nbsp;·&nbsp;
+            <a href="https://github.com/rahul428-2/r-browser">Source code</a> &nbsp;·&nbsp;
+            <a href="https://github.com/rahul428-2/r-browser/issues">Report a problem</a> &nbsp;·&nbsp;
+            Open source under MPL-2.0
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const { invoke } = window.__TAURI__.core;
+    const $ = (id) => document.getElementById(id);
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+    const LISTS = [
+      ["no_block", "Ad blocking switched off"],
+      ["popups", "Pop-ups allowed"],
+      ["trusted", "Trusted (no lockdown)"],
+      ["never_save", "Never save passwords"],
+    ];
+    let state;
+
+    async function load() {
+      state = await invoke("settings_get");
+      const s = state.settings;
+      $("engine").replaceChildren(...state.engines.map(([k, name]) => { const o = el("option", null, name); o.value = k; o.selected = k === s.search; return o; }));
+      for (const k of ["block_ads", "https_only", "lockdown"]) $(k).checked = s[k];
+      $("version").textContent = `R-Browser ${state.version}`;
+      const box = $("sites");
+      box.replaceChildren();
+      for (const [list, name] of LISTS) {
+        if (!state[list].length) continue;
+        box.append(el("h3", null, name));
+        for (const host of state[list]) {
+          const row = el("div", "site"), x = el("button", "text", "Remove");
+          x.setAttribute("aria-label", `Remove ${host} from ${name}`);
+          x.onclick = async () => { await invoke("site_remove", { list, host }); load(); };
+          row.append(el("span", null, host), x);
+          box.append(row);
+        }
+      }
+      if (!box.children.length) box.append(el("p", "sub", "No exceptions yet."));
+    }
+
+    async function save() {
+      const settings = { search: $("engine").value, block_ads: $("block_ads").checked, https_only: $("https_only").checked, lockdown: $("lockdown").checked };
+      await invoke("settings_set", { settings });
+      $("applies").textContent = "Saved. Secure connections and lockdown apply from the next page you open.";
+    }
+    $("engine").onchange = save;
+    for (const k of ["block_ads", "https_only", "lockdown"]) $(k).onchange = save;
+
+    $("clear").onclick = async () => {
+      const history = $("c_history").checked, siteData = $("c_site").checked, downloads = $("c_downloads").checked;
+      if (!history && !siteData && !downloads) { $("cleared").textContent = "Pick at least one thing to clear."; return; }
+      const range = +$("range").value;
+      const since = range ? Math.floor(Date.now() / 1000) - range : 0;
+      $("clear").disabled = true;
+      try { await invoke("clear_data", { since, history, downloads, siteData }); $("cleared").textContent = "Cleared."; }
+      catch (e) { $("cleared").textContent = `Couldn't clear: ${e}`; }
+      finally { $("clear").disabled = false; }
+    };
+
+    $("update").onclick = () => invoke("check_updates").catch(() => {});
+    load();
+  </script>
+</body>
+</html>

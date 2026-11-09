@@ -38,7 +38,14 @@
     </form>
   </main>
   <script>
-    // Same rules as the URL bar (core/omnibox.rs): domain-looking input opens the site, anything else searches Google.
+    // Same rules as the URL bar (core/omnibox.rs): domain-looking input opens the site, anything else searches
+    // with the engine picked in Settings.
+    let searchUrl = "https://www.google.com/search?q=";
+    window.__TAURI__.core.invoke("settings_get").then((s) => {
+      searchUrl = s.search_url;
+      const name = (s.engines.find((e) => e[0] === s.settings.search) || [, "Google"])[1];
+      document.getElementById("q").placeholder = `Search ${name} or type a web address`;
+    }).catch(() => {});
     document.getElementById("f").addEventListener("submit", (e) => {
       e.preventDefault();
       const s = document.getElementById("q").value.trim();
@@ -47,7 +54,7 @@
       const local = host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host);
       const looksLikeUrl = /^https?:\/\//.test(s) || (!/\s/.test(s) && (local || (host.includes(".") && !host.startsWith(".") && !host.endsWith("."))));
       location.href = looksLikeUrl ? (/^https?:\/\//.test(s) ? s : (local ? "http://" : "https://") + s)
-                                   : "https://www.google.com/search?q=" + encodeURIComponent(s).replace(/%20/g, "+");
+                                   : searchUrl + encodeURIComponent(s).replace(/%20/g, "+");
     });
   </script>
 </body>

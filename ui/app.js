@@ -363,6 +363,7 @@ $("star").onclick = (e) => { e.preventDefault(); invoke("toggle_bookmark"); };
 
 // ---- passwords: fill (key icon) and save prompt ----
 $("key").onclick = (e) => { e.preventDefault(); invoke("password_menu").catch(() => {}); };
+$("more").onclick = () => invoke("app_menu").catch(() => {});
 let pwTimer;
 const hidePw = () => { $("savepw").hidden = true; clearTimeout(pwTimer); };
 me.listen("save-password", (e) => {

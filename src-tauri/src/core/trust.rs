@@ -64,6 +64,9 @@ impl TrustDb {
     /// Clearing history forgets which sites passed the check.
     pub fn clear_checked(&mut self) { self.checked.clear(); }
 
+    /// Settings page: stop trusting a domain the user trusted.
+    pub fn untrust(&mut self, domain: &str) { self.user.remove(domain); }
+
     /// Trust `url`'s site from now on; returns the domain that was added.
     pub fn trust(&mut self, url: &str) -> Option<String> {
         let d = site_of(url)?;

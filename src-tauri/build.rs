@@ -44,6 +44,12 @@ fn main() {
         "popup_dismiss",
         "insecure_continue",
         "trust_menu",
+        "app_menu",
+        "settings_get",
+        "settings_set",
+        "site_remove",
+        "clear_data",
+        "check_updates",
     ];
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(commands)))
         .expect("tauri build");

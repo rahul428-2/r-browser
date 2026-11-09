@@ -22,6 +22,7 @@
       <symbol id="i-dn" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
       <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2 2M14 9l2 2"/></symbol>
       <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5s1.2-6.2 3.6-8.5z"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5.5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18.5" r="1.6"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
     </defs>
   </svg>
@@ -54,7 +55,7 @@
       <span id="chip" title=""><svg><use href="#i-search"/></svg></span>
       <button id="unv" class="icon" hidden title="Unverified site: click to see why"><svg><use href="#i-warn"/></svg>Unverified</button>
       <span id="pretty" aria-hidden="true"></span>
-      <input id="url" list="sugg" spellcheck="false" autocomplete="off" placeholder="Search Google or type a web address">
+      <input id="url" list="sugg" spellcheck="false" autocomplete="off" placeholder="Search or type a web address">
       <datalist id="sugg"></datalist>
       <button id="key" class="icon" hidden aria-label="Fill a saved password" title="Fill a saved password"><svg><use href="#i-key"/></svg></button>
       <button id="star" class="icon" aria-label="Bookmark this page" title="Bookmark this page (Ctrl/⌘+D)"><svg><use href="#i-star"/></svg></button>
@@ -65,6 +66,7 @@
       <button type="submit" id="findnext" class="icon" aria-label="Next match"><svg><use href="#i-dn"/></svg></button>
       <button type="button" id="findclose" class="icon" aria-label="Close find"><svg><use href="#i-x"/></svg></button>
     </form>
+    <button id="more" class="icon" aria-label="Menu" title="Settings, history and more"><svg><use href="#i-more"/></svg></button>
   </nav>
   <div id="guard" aria-hidden="true"></div>
 
