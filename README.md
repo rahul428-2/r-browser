@@ -60,7 +60,7 @@ Every signed file is built from this repository by GitHub Actions ([windows.yml]
 cd src-tauri
 cargo tauri dev --no-watch          # run
 cargo test                          # tests
-cargo tauri build --bundles app     # release app
+cargo tauri build --target universal-apple-darwin --bundles app   # release app (Intel + Apple silicon)
 ```
 
 ## License
