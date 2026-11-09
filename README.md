@@ -6,6 +6,29 @@
 
 A security-first, lightweight desktop browser. No Chromium: built on [Tauri](https://tauri.app) and the web engine your OS already ships (WebKit on macOS).
 
+## Install (macOS 14 or later)
+
+1. Open **Terminal**: press <kbd>⌘ Command</kbd> + <kbd>Space</kbd>, type `Terminal`, press <kbd>Return</kbd>.
+2. Paste this line and press <kbd>Return</kbd>:
+   ```sh
+   curl -fsSL https://rahul428-2.github.io/r-browser/install.sh | bash
+   ```
+3. That's it. It downloads the latest R-Browser, puts it in **Applications** and opens it. No "damaged" or "can't be verified" warning.
+
+R-Browser updates itself after that. To reinstall, run the same line again. To uninstall, drag R-Browser from Applications to the Bin.
+
+<details>
+<summary>Prefer downloading in the browser?</summary>
+
+Download [R-Browser.app.tar.gz](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser.app.tar.gz), double-click it to unpack, and move **R-Browser** to Applications. Because the app isn't notarized by Apple (that needs a paid $99/year account), macOS will say it is "damaged". It isn't. Run this once in Terminal, then open it:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/R-Browser.app
+```
+</details>
+
+The installer script is [site/install.sh](site/install.sh) if you want to read it first. Windows: [R-Browser-Windows-Setup.exe](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser-Windows-Setup.exe) (early, unsigned). All files: [Releases](https://github.com/rahul428-2/r-browser/releases/latest).
+
 ## What it does
 
 - **Built-in ad, tracker and pop-up blocking** (EasyList, EasyPrivacy, Peter Lowe), switchable per site.
@@ -26,22 +49,6 @@ A security-first, lightweight desktop browser. No Chromium: built on [Tauri](htt
 | Chrome | 3,780 MB | 23.3 % |
 
 Details in [bench/README.md](bench/README.md).
-
-## Download
-
-| Windows 10/11 (64-bit) | macOS 14+ |
-|---|---|
-| **[⬇ R-Browser-Windows-Setup.exe](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser-Windows-Setup.exe)** | **[⬇ R-Browser.app.tar.gz](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser.app.tar.gz)** |
-
-**Windows:** run the setup file. Until the installer is code-signed, SmartScreen may say "Windows protected your PC": click **More info** → **Run anyway**.
-**macOS:** easiest is one line in Terminal (downloads, installs to Applications, opens it):
-```sh
-curl -fsSL https://rahul428-2.github.io/r-browser/install.sh | bash
-```
-If you downloaded the `.tar.gz` in a browser instead, macOS may call the app "damaged" because it isn't notarized (no paid Apple certificate). It isn't damaged: run `xattr -dr com.apple.quarantine /Applications/R-Browser.app` once, then open it.
-
-
-Both update themselves after that. Linux is planned. All files: [Releases](https://github.com/rahul428-2/r-browser/releases/latest).
 
 ## Code signing policy
 
