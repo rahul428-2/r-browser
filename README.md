@@ -13,19 +13,8 @@ A security-first, lightweight desktop browser. No Chromium: built on [Tauri](htt
    ```sh
    curl -fsSL https://rahul428-2.github.io/r-browser/install.sh | bash
    ```
-3. That's it. It downloads the latest R-Browser, puts it in **Applications** and opens it. No "damaged" or "can't be verified" warning.
 
 R-Browser updates itself after that. To reinstall, run the same line again. To uninstall, drag R-Browser from Applications to the Bin.
-
-<details>
-<summary>Prefer downloading in the browser?</summary>
-
-Download [R-Browser.app.tar.gz](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser.app.tar.gz), double-click it to unpack, and move **R-Browser** to Applications. Because the app isn't notarized by Apple (that needs a paid $99/year account), macOS will say it is "damaged". It isn't. Run this once in Terminal, then open it:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/R-Browser.app
-```
-</details>
 
 The installer script is [site/install.sh](site/install.sh) if you want to read it first. Windows: [R-Browser-Windows-Setup.exe](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser-Windows-Setup.exe) (early, unsigned). All files: [Releases](https://github.com/rahul428-2/r-browser/releases/latest).
 
