@@ -1,0 +1,15 @@
+{
+  "version": "0.1.6",
+  "notes": "New \u22ee menu beside the address bar: Settings (search engine, privacy switches, clear browsing data, updates), History and Extensions. Now runs on Intel Macs too. Needs macOS 14 or later.",
+  "pub_date": "2026-11-09T05:04:49Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTSUpKdjhWYlN0Y25wdG5heExFUGljN2RERmkvUWxTdzBlZTBxcGE2UXRpRkFNMVB5a2dWalBZUHVxMWtiL1dDV01RWEZyUUhNb3RFRnRGUk5uRWRiSFRUVEUrczFnWkFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjAwNjc4CWZpbGU6Ui1Ccm93c2VyLmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuNgpQeWUyWXYxdjY5YWFEWWt2NkxidUhmVTh2eDMrYkhGQmttcVZHSEJwbzArcklRQUZkamJJUmk4bDR5TGYwcUxVNUc4Zy9GUFh5ZmtCTDRxTmFyR1VCUT09Cg==",
+      "url": "https://github.com/rahul428-2/r-browser/releases/download/v0.1.6/R-Browser.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTSUpKdjhWYlN0Y25wdG5heExFUGljN2RERmkvUWxTdzBlZTBxcGE2UXRpRkFNMVB5a2dWalBZUHVxMWtiL1dDV01RWEZyUUhNb3RFRnRGUk5uRWRiSFRUVEUrczFnWkFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0MjAwNjc4CWZpbGU6Ui1Ccm93c2VyLmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuNgpQeWUyWXYxdjY5YWFEWWt2NkxidUhmVTh2eDMrYkhGQmttcVZHSEJwbzArcklRQUZkamJJUmk4bDR5TGYwcUxVNUc4Zy9GUFh5ZmtCTDRxTmFyR1VCUT09Cg==",
+      "url": "https://github.com/rahul428-2/r-browser/releases/download/v0.1.6/R-Browser.app.tar.gz"
+    }
+  }
+}

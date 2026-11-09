@@ -44,7 +44,8 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcyQURCNDU1RkM5QjI0ODgKUldTSUpKdjhWYlN0Y2xTUW9JVWxLQlVCSHdyUlU2M0hyenE1RXpwNmVnR084V2JKMWdQZmxoMmcK",
       "endpoints": [
-        "https://github.com/rahul428-2/r-browser/releases/latest/download/latest.json"
+        "https://github.com/rahul428-2/r-browser/releases/latest/download/latest.json",
+        "https://rahul428-2.github.io/r-browser/latest.json"
       ]
     }
   }

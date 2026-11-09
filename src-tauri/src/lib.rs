@@ -794,20 +794,27 @@ async fn check_update(app: AppHandle, manual: bool) {
         if manual { ask_restart(&app); }
         return;
     }
-    let found = match app.updater() { Ok(u) => u.check().await, Err(e) => Err(e) };
-    let r = match found {
-        Ok(Some(u)) => match u.download(|_, _| {}, || {}).await.and_then(|b| u.verify(&b).map(|_| b)) {
-            Ok(bytes) => {
-                *app.state::<UpdateReady>().0.lock().unwrap() = Some((u, bytes));
-                for ui in app.webviews().into_keys().filter(|l| l.ends_with("-ui")) { update_pill(&app, &ui); }
-                if manual { ask_restart(&app); }
-                return;
-            }
-            Err(e) => format!("The update couldn't be downloaded: {e}"),
-        },
-        Ok(None) => format!("R-Browser {} is up to date.", app.package_info().version),
-        Err(e) => format!("Couldn't check for updates: {e}"),
-    };
+    // GitHub's release downloads sometimes time out (504) for a while, especially right after a release:
+    // try a few times before giving up. Up to date and success return straight away.
+    let mut r = String::new();
+    for wait in [0, 2, 5, 10] {
+        // ponytail: blocks one async worker for a few seconds; fine for a once-a-day / on-click check.
+        std::thread::sleep(std::time::Duration::from_secs(wait));
+        let found = match app.updater() { Ok(u) => u.check().await, Err(e) => Err(e) };
+        r = match found {
+            Ok(Some(u)) => match u.download(|_, _| {}, || {}).await.and_then(|b| u.verify(&b).map(|_| b)) {
+                Ok(bytes) => {
+                    *app.state::<UpdateReady>().0.lock().unwrap() = Some((u, bytes));
+                    for ui in app.webviews().into_keys().filter(|l| l.ends_with("-ui")) { update_pill(&app, &ui); }
+                    if manual { ask_restart(&app); }
+                    return;
+                }
+                Err(e) => { eprintln!("update download: {e}"); format!("R-Browser {} is available, but it couldn't be downloaded right now. Please try again in a few minutes.", u.version) }
+            },
+            Ok(None) => { if manual { say(format!("R-Browser {} is up to date.", app.package_info().version)); } return; }
+            Err(e) => { eprintln!("update check: {e}"); "Couldn't reach the update server. Check your internet connection and try again in a few minutes.".into() }
+        };
+    }
     if manual { say(r); } else { eprintln!("update: {r}"); }
 }
 
