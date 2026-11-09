@@ -29,12 +29,17 @@ Details in [bench/README.md](bench/README.md).
 
 ## Download
 
-| Windows 10/11 (64-bit) | macOS 14+ (Apple silicon) |
+| Windows 10/11 (64-bit) | macOS 14+ |
 |---|---|
 | **[⬇ R-Browser-Windows-Setup.exe](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser-Windows-Setup.exe)** | **[⬇ R-Browser.app.tar.gz](https://github.com/rahul428-2/r-browser/releases/latest/download/R-Browser.app.tar.gz)** |
 
 **Windows:** run the setup file. Until the installer is code-signed, SmartScreen may say "Windows protected your PC": click **More info** → **Run anyway**.
-**macOS:** unpack it and move **R-Browser.app** to Applications. The app is not notarized (no paid certificate), so the first time macOS says it can't verify it: click **Done**, then **System Settings → Privacy & Security → Open Anyway**.
+**macOS:** easiest is one line in Terminal (downloads, installs to Applications, opens it):
+```sh
+curl -fsSL https://rahul428-2.github.io/r-browser/install.sh | bash
+```
+If you downloaded the `.tar.gz` in a browser instead, macOS may call the app "damaged" because it isn't notarized (no paid Apple certificate). It isn't damaged: run `xattr -dr com.apple.quarantine /Applications/R-Browser.app` once, then open it.
+
 
 Both update themselves after that. Linux is planned. All files: [Releases](https://github.com/rahul428-2/r-browser/releases/latest).
 
